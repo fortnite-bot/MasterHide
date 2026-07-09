@@ -2,7 +2,12 @@
 
 #define DLLINJECTOR_POOL_TAG 'jILD'
 
-VOID KernelAPC(PVOID, PVOID, PVOID, PVOID, PVOID) {
+VOID NTAPI KernelAPC(PRKAPC apc, PKNORMAL_ROUTINE*, PVOID*, PVOID*, PVOID*) {
+    ExFreePool(apc);
+}
+
+VOID NTAPI RundownAPC(PRKAPC apc) {
+    ExFreePool(apc);
 }
 
 NTSTATUS call_apc(PKTHREAD target_thread, PVOID target_function, PVOID params) {
@@ -13,8 +18,8 @@ NTSTATUS call_apc(PKTHREAD target_thread, PVOID target_function, PVOID params) {
     KeInitializeApc(apc,
         target_thread,
         OriginalApcEnvironment,
-        reinterpret_cast<PKKERNEL_ROUTINE>(KernelAPC),
-        nullptr,
+        KernelAPC,
+        RundownAPC,
         reinterpret_cast<PKNORMAL_ROUTINE>(target_function),
         UserMode,
         params);

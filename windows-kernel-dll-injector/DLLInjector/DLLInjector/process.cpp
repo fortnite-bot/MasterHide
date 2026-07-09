@@ -78,10 +78,18 @@ PVOID get_all_processes() {
     while (true) {
         processes_allocation_size += 0x10000;
         processes_pool = ExAllocatePool2(POOL_FLAG_PAGED, processes_allocation_size, DLLINJECTOR_POOL_TAG);
+        if (nullptr == processes_pool) {
+            return nullptr;
+        }
 
         auto status = ZwQuerySystemInformation(SystemProcessInformation, processes_pool, (ULONG)processes_allocation_size, nullptr);
         if (status == STATUS_INFO_LENGTH_MISMATCH) {
             ExFreePool(processes_pool);
+            processes_pool = nullptr;
+        }
+        else if (!NT_SUCCESS(status)) {
+            ExFreePool(processes_pool);
+            return nullptr;
         }
         else {
             break;
@@ -91,15 +99,25 @@ PVOID get_all_processes() {
 }
 
 NTSTATUS get_process_info_by_pid(size_t pid, ProcessInfo* process_info) {
+    if (nullptr == process_info) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(process_info, sizeof(ProcessInfo));
+
     size_t number_of_processes = 0;
     ProcessInfo* processes = get_processes_info(&number_of_processes);
     if (nullptr == processes) {
         return STATUS_UNSUCCESSFUL;
     }
+
+    NTSTATUS status = STATUS_NOT_FOUND;
     for (size_t i = 0; i < number_of_processes; i++) {
 	    if (pid == (processes + i)->process_id) {
             *process_info = *(processes + i);
             (processes + i)->threads_id = nullptr;
+            status = STATUS_SUCCESS;
+            break;
 	    }
     }
     for (size_t i = 0; i < number_of_processes; i++) {
@@ -108,7 +126,7 @@ NTSTATUS get_process_info_by_pid(size_t pid, ProcessInfo* process_info) {
     	}
     }
     ExFreePool(processes);
-	return STATUS_SUCCESS;
+	return status;
 }
 
 ProcessInfo* get_processes_info(size_t* number_of_processes) {
@@ -117,25 +135,48 @@ ProcessInfo* get_processes_info(size_t* number_of_processes) {
         return nullptr;
     }
     *number_of_processes = 0;
-    for (auto process = (SYSTEM_PROCESS_INFORMATION*)all_processes; process->NextEntryOffset != 0;
-        process = (SYSTEM_PROCESS_INFORMATION*)((char*)process + process->NextEntryOffset)) {
+    for (auto process = (SYSTEM_PROCESS_INFORMATION*)all_processes;;) {
         *number_of_processes += 1;
+        if (0 == process->NextEntryOffset) {
+            break;
+        }
+        process = (SYSTEM_PROCESS_INFORMATION*)((char*)process + process->NextEntryOffset);
     }
 
     auto processes_info = (ProcessInfo*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(ProcessInfo) * *number_of_processes, DLLINJECTOR_POOL_TAG);
+    if (nullptr == processes_info) {
+        ExFreePool(all_processes);
+        return nullptr;
+    }
 
     size_t i = 0;
-    for (auto process = (SYSTEM_PROCESS_INFORMATION*)all_processes; process->NextEntryOffset != 0;
-        process = (SYSTEM_PROCESS_INFORMATION*)((char*)process + process->NextEntryOffset), ++i) {
+    for (auto process = (SYSTEM_PROCESS_INFORMATION*)all_processes;; ++i) {
         (processes_info + i)->process_id = (size_t)process->ProcessId;
 		(processes_info + i)->number_of_threads = (size_t)process->NumberOfThreads;
         if (0 == process->NumberOfThreads) {
-            continue;
+            (processes_info + i)->threads_id = nullptr;
         }
-    	(processes_info + i)->threads_id = (size_t*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(size_t) * process->NumberOfThreads, DLLINJECTOR_POOL_TAG);
-    	for (size_t j = 0; j < process->NumberOfThreads; j++) {
-            *(((ProcessInfo*)(processes_info + i))->threads_id + j) = (size_t)process->Threads[j].ClientId.UniqueThread;
+        else {
+    	    (processes_info + i)->threads_id = (size_t*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(size_t) * process->NumberOfThreads, DLLINJECTOR_POOL_TAG);
+            if (nullptr == (processes_info + i)->threads_id) {
+                for (size_t j = 0; j < i; j++) {
+                    if (nullptr != (processes_info + j)->threads_id) {
+                        ExFreePool((processes_info + j)->threads_id);
+                    }
+                }
+                ExFreePool(processes_info);
+                ExFreePool(all_processes);
+                return nullptr;
+            }
+    	    for (size_t j = 0; j < process->NumberOfThreads; j++) {
+                *(((ProcessInfo*)(processes_info + i))->threads_id + j) = (size_t)process->Threads[j].ClientId.UniqueThread;
+            }
         }
+
+        if (0 == process->NextEntryOffset) {
+            break;
+        }
+        process = (SYSTEM_PROCESS_INFORMATION*)((char*)process + process->NextEntryOffset);
     }
 	
     ExFreePool(all_processes);

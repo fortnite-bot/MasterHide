@@ -1,7 +1,27 @@
 #include "device_handlers.h"
 
 #include "common.h"
-#include "dll_injection.h"
+#include "Injector.h"
+
+static NTSTATUS InitDllPathFromArgs(const InjectDllArgs* args, PUNICODE_STRING dll_path) {
+	if (nullptr == args || nullptr == dll_path) {
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	size_t length = 0;
+	while (length < RTL_NUMBER_OF(args->dll_path) && L'\0' != args->dll_path[length]) {
+		length++;
+	}
+
+	if (0 == length || length == RTL_NUMBER_OF(args->dll_path)) {
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	dll_path->Buffer = const_cast<PWCH>(args->dll_path);
+	dll_path->Length = static_cast<USHORT>(length * sizeof(WCHAR));
+	dll_path->MaximumLength = sizeof(args->dll_path);
+	return STATUS_SUCCESS;
+}
 
 NTSTATUS device_create_close(PDEVICE_OBJECT device_object, PIRP irp) {
 	UNREFERENCED_PARAMETER(device_object);
@@ -28,7 +48,12 @@ NTSTATUS device_ioctl(PDEVICE_OBJECT device_object, PIRP irp) {
 			break;
 		}
 		auto args = static_cast<InjectDllArgs*>(irp->AssociatedIrp.SystemBuffer);
-		nt_status = inject_dll(*args);
+		UNICODE_STRING dll_path = {};
+		nt_status = InitDllPathFromArgs(args, &dll_path);
+		if (!NT_SUCCESS(nt_status)) {
+			break;
+		}
+		nt_status = InjectDllIntoProcess(reinterpret_cast<HANDLE>(args->pid), &dll_path);
 	}
 	break;
 	default: 

