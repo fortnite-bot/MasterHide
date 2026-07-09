@@ -45,24 +45,11 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 11,
+          "SelectedChildIndex": 6,
           "Children": [
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{40ea2e6b-2121-4bb8-a43e-c83c04b51041}"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 1,
-              "Title": "tools.cpp",
-              "DocumentMoniker": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\tools.cpp",
-              "RelativeDocumentMoniker": "MasterHide\\tools.cpp",
-              "ToolTip": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\tools.cpp",
-              "RelativeToolTip": "MasterHide\\tools.cpp",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAADkAAAAEAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-07-09T11:24:41.386Z",
-              "EditorCaption": ""
             },
             {
               "$type": "Bookmark",
@@ -79,6 +66,43 @@
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{c9c0ae26-aa77-11d2-b3f0-0000f87570ee}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "tools.cpp",
+              "DocumentMoniker": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\tools.cpp",
+              "RelativeDocumentMoniker": "MasterHide\\tools.cpp",
+              "ToolTip": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\tools.cpp",
+              "RelativeToolTip": "MasterHide\\tools.cpp",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAADkAAAAEAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-07-09T11:24:41.386Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "shadow_ssdt.cpp",
+              "DocumentMoniker": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\shadow_ssdt.cpp",
+              "RelativeDocumentMoniker": "MasterHide\\shadow_ssdt.cpp",
+              "ToolTip": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\shadow_ssdt.cpp",
+              "RelativeToolTip": "MasterHide\\shadow_ssdt.cpp",
+              "ViewState": "AgIAAMMAAAAAAAAAAAAhwNwAAAAbAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-07-08T12:36:54.083Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "Microsoft.CppBuild.targets",
+              "DocumentMoniker": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
+              "RelativeDocumentMoniker": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
+              "ToolTip": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
+              "RelativeToolTip": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
+              "ViewState": "AgIAAPsBAAAAAAAAAAAWwAoCAAAwAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003801|",
+              "WhenOpened": "2026-07-08T11:10:11.436Z"
             },
             {
               "$type": "Document",
@@ -142,19 +166,6 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 0,
-              "Title": "shadow_ssdt.cpp",
-              "DocumentMoniker": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\shadow_ssdt.cpp",
-              "RelativeDocumentMoniker": "MasterHide\\shadow_ssdt.cpp",
-              "ToolTip": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\shadow_ssdt.cpp",
-              "RelativeToolTip": "MasterHide\\shadow_ssdt.cpp",
-              "ViewState": "AgIAAMwAAAAAAAAAAAAhwNwAAAAbAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-07-08T12:36:54.083Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
               "DocumentIndex": 5,
               "Title": "ssdt.cpp",
               "DocumentMoniker": "C:\\Users\\hallo\\Downloads\\MasterHide\\MasterHide\\ssdt.cpp",
@@ -164,18 +175,6 @@
               "ViewState": "AgIAAGEAAAAAAAAAAAAcwGYAAAADAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2026-07-08T12:10:01.803Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 6,
-              "Title": "Microsoft.CppBuild.targets",
-              "DocumentMoniker": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
-              "RelativeDocumentMoniker": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
-              "ToolTip": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
-              "RelativeToolTip": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Microsoft\\VC\\v170\\Microsoft.CppBuild.targets",
-              "ViewState": "AgIAAPsBAAAAAAAAAAAWwAoCAAAwAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003801|",
-              "WhenOpened": "2026-07-08T11:10:11.436Z"
             }
           ]
         }
