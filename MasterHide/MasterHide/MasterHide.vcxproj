@@ -102,6 +102,9 @@
     <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\apc.cpp">
       <ObjectFileName>$(IntDir)dllinjector_apc.obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\diag.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_diag.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\Injector.cpp">
       <ObjectFileName>$(IntDir)dllinjector_Injector.obj</ObjectFileName>
     </ClCompile>
