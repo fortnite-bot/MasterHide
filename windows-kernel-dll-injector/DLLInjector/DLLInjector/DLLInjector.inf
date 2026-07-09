@@ -1,0 +1,41 @@
+;
+; DLLInjector.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderName%
+DriverVer=
+CatalogFile=DLLInjector.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+DLLInjector.sys = 1
+
+[DefaultInstall.NT$ARCH$]
+CopyFiles = @DLLInjector.sys
+
+[DefaultInstall.NT$ARCH$.Services]
+AddService = DLLInjector,,DLLInjector_Service_Inst
+
+[DLLInjector_Service_Inst]
+DisplayName    = %ServiceDisplayName%
+Description    = %ServiceDescription%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %13%\DLLInjector.sys
+
+[Strings]
+ProviderName="DLLInjector"
+ServiceDisplayName="DLLInjector"
+ServiceDescription="DLLInjector kernel driver"
+DiskName="DLLInjector Source Disk"
