@@ -284,44 +284,49 @@ void sssdt::Init()
 	{
 		DBGPRINT( "win32k.sys .text section 0x%p\n", pCode );
 
-		if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserQueryWindow, reinterpret_cast< PVOID* >( &oNtUserQueryWindow ), SYSCALL_NTUSERQUERYWND ) )
-		{
-			DBGPRINT( "NtUserQueryWindow hooked successfully!\n" );
-		}
-		else
-			DBGPRINT( "Failed to hook NtUserQueryWindow!\n" );
+		// if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserQueryWindow, reinterpret_cast< PVOID* >( &oNtUserQueryWindow ), SYSCALL_NTUSERQUERYWND ) )
+		// {
+		// 	DBGPRINT( "NtUserQueryWindow hooked successfully!\n" );
+		// }
+		// else
+		// 	DBGPRINT( "Failed to hook NtUserQueryWindow!\n" );
 
-		if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserFindWindowEx, reinterpret_cast< PVOID* >( &oNtUserFindWindowEx ), SYSCALL_NTUSERFINDWNDEX ) )
-		{
-			DBGPRINT( "NtUserFindWindowEx hooked successfully!\n" );
-		}
-		else
-			DBGPRINT( "Failed to hook NtUserFindWindowEx!\n" );
+		// if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserFindWindowEx, reinterpret_cast< PVOID* >( &oNtUserFindWindowEx ), SYSCALL_NTUSERFINDWNDEX ) )
+		// {
+		// 	DBGPRINT( "NtUserFindWindowEx hooked successfully!\n" );
+		// }
+		// else
+		// 	DBGPRINT( "Failed to hook NtUserFindWindowEx!\n" );
 
-		if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserWindowFromPoint, reinterpret_cast< PVOID* >( &oNtUserWindowFromPoint ), SYSCALL_NTUSERWNDFROMPOINT ) )
-		{
-			DBGPRINT( "NtUserWindowFromPoint hooked successfully!\n" );
-		}
-		else
-			DBGPRINT( "Failed to hook NtUserWindowFromPoint!\n" );
+		// if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserWindowFromPoint, reinterpret_cast< PVOID* >( &oNtUserWindowFromPoint ), SYSCALL_NTUSERWNDFROMPOINT ) )
+		// {
+		// 	DBGPRINT( "NtUserWindowFromPoint hooked successfully!\n" );
+		// }
+		// else
+		// 	DBGPRINT( "Failed to hook NtUserWindowFromPoint!\n" );
 
-		if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserBuildHwndList, reinterpret_cast< PVOID* >( &oNtUserBuildHwndList ), SYSCALL_NTUSERBUILDWNDLIST ) )
-		{
-			DBGPRINT( "NtUserBuildHwndList hooked successfully!\n" );
-		}
-		else
-			DBGPRINT( "Failed to hook NtUserBuildHwndList!\n" );
+		// if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserBuildHwndList, reinterpret_cast< PVOID* >( &oNtUserBuildHwndList ), SYSCALL_NTUSERBUILDWNDLIST ) )
+		// {
+		// 	DBGPRINT( "NtUserBuildHwndList hooked successfully!\n" );
+		// }
+		// else
+		// 	DBGPRINT( "Failed to hook NtUserBuildHwndList!\n" );
 
-		if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserGetForegroundWindow, reinterpret_cast< PVOID* >( &oNtUserGetForegroundWindow ), SYSCALL_NTGETFOREGROUNDWND ) )
-		{
-			DBGPRINT( "NtUserGetForegroundWindow hooked successfully!\n" );
-		}
-		else
-			DBGPRINT( "Failed to hook NtUserGetForegroundWindow!\n" );
+		// if ( HookSSSDT( pCode, ulCodeSize, &hkNtUserGetForegroundWindow, reinterpret_cast< PVOID* >( &oNtUserGetForegroundWindow ), SYSCALL_NTGETFOREGROUNDWND ) )
+		// {
+		// 	DBGPRINT( "NtUserGetForegroundWindow hooked successfully!\n" );
+		// }
+		// else
+		// 	DBGPRINT( "Failed to hook NtUserGetForegroundWindow!\n" );
 	}
 
-	KeUnstackDetachProcess( &apc );
-	ObDereferenceObject( Process );
+DbgPrint("[Shadow] About to detach from csrss.exe\n");
+KeUnstackDetachProcess( &apc );
+DbgPrint("[Shadow] Detach complete\n");
+
+DbgPrint("[Shadow] About to dereference process object\n");
+ObDereferenceObject( Process );
+DbgPrint("[Shadow] Dereference complete, sssdt::Init() finished\n");
 #else
 
 	if ( kaspersky::hook_shadow_ssdt_routine( SYSCALL_NTUSERQUERYWND, hkNtUserQueryWindow, reinterpret_cast< PVOID* >( &oNtUserQueryWindow ) ) )

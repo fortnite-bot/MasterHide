@@ -106,8 +106,10 @@ extern "C" NTSTATUS NTAPI DriverEntry( PDRIVER_OBJECT pDriverObject, PUNICODE_ST
 
 		DBGPRINT( "Hypervisor loaded!\n" );
 #endif
-		ssdt::Init();
-		sssdt::Init();
+		DbgPrint("[MasterHide] ssdt::Init() starting\n");
+		// ssdt::Init();
+		// sssdt::Init();
+		DbgPrint("[MasterHide] sssdt::Init() returned\n");
 	}
 	else
 		// No support for other OS
