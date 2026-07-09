@@ -545,6 +545,30 @@ NtQuerySystemInformation_ oNtQuerySystemInformation = NULL;
 // Global recursion guard
 static volatile LONG g_HookActive = 0;
 
+#ifndef MH_VERBOSE_HKQSI
+#define MH_VERBOSE_HKQSI 0
+#endif
+
+#if !MH_VERBOSE_HKQSI
+static bool MhIsQuietDbgPrint(_In_opt_z_ const char* Format)
+{
+    static const char Prefix[] = "[HkQSI]";
+    return Format &&
+        RtlCompareMemory(Format, Prefix, sizeof(Prefix) - 1) == sizeof(Prefix) - 1;
+}
+
+template <typename... Args>
+static void MhFilteredDbgPrint(_In_z_ const char* Format, Args... args)
+{
+    if (!MhIsQuietDbgPrint(Format)) {
+        DbgPrint(Format, args...);
+    }
+}
+
+#undef DBGPRINT
+#define DBGPRINT(...) MhFilteredDbgPrint(__VA_ARGS__)
+#endif
+
 NTSTATUS NTAPI hkNtQuerySystemInformation(
     SYSTEM_INFORMATION_CLASS SystemInformationClass,
     PVOID Buffer,

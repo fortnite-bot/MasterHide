@@ -37,3 +37,4 @@ Release/
 x64/
 script.txt
 *.ps1
+!DLLInjector/Run-DiagnosticRound.ps1

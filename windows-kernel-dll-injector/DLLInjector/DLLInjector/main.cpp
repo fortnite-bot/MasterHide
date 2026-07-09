@@ -2,6 +2,7 @@
 
 #include "device_handlers.h"
 #include "consts.h"
+#include "diag.h"
 
 void driver_unload(PDRIVER_OBJECT driver_object) {
 	UNICODE_STRING  win32_name;
@@ -15,6 +16,7 @@ void driver_unload(PDRIVER_OBJECT driver_object) {
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
 	UNREFERENCED_PARAMETER(RegistryPath);
 
+	DiagInitialize();
 	DbgPrint("Hello from driver entry\n");
 
 	UNICODE_STRING  nt_name;

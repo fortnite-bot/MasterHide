@@ -1,6 +1,7 @@
 #include "InjectorInternal.h"
 
 #include "apc.h"
+#include "diag.h"
 #include "pe.h"
 #include "process.h"
 
@@ -45,6 +46,7 @@ NTSTATUS CreateTargetApcPayload(PUNICODE_STRING DllPath, PVOID* ApcRoutine, PVOI
 	RtlCopyMemory(user_apc_args.dll_path, DllPath->Buffer, DllPath->Length);
 	user_apc_args.dll_path[DllPath->Length / sizeof(WCHAR)] = L'\0';
 	user_apc_args.load_library = (LoadLibraryWFn)FindLoadLibraryW();
+	DiagSetLoadLibraryResult((PVOID)user_apc_args.load_library);
 	if (nullptr == user_apc_args.load_library) {
 		return STATUS_PROCEDURE_NOT_FOUND;
 	}
@@ -59,6 +61,7 @@ NTSTATUS CreateTargetApcPayload(PUNICODE_STRING DllPath, PVOID* ApcRoutine, PVOI
 		MEM_COMMIT | MEM_RESERVE,
 		PAGE_READWRITE
 	);
+	DiagSetContextAllocationStatus(status);
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
@@ -75,6 +78,7 @@ NTSTATUS CreateTargetApcPayload(PUNICODE_STRING DllPath, PVOID* ApcRoutine, PVOI
 		MEM_COMMIT | MEM_RESERVE,
 		PAGE_EXECUTE_READWRITE
 	);
+	DiagSetRoutineAllocationStatus(status, routine_size);
 	if (!NT_SUCCESS(status)) {
 		FreeTargetApcPayload(nullptr, injected_apc_context);
 		return status;
@@ -104,25 +108,30 @@ NTSTATUS QueueUserModeApcToProcessThreads(HANDLE ProcessId, PVOID ApcRoutine, PV
 
 	ProcessInfo process_info = {};
 	NTSTATUS status = get_process_info_by_pid(reinterpret_cast<size_t>(ProcessId), &process_info);
+	DiagSetThreadEnumerationStatus(status, NT_SUCCESS(status) ? process_info.number_of_threads : 0);
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
 
 	if (0 == process_info.number_of_threads || nullptr == process_info.threads_id) {
+		DiagSetThreadEnumerationStatus(STATUS_NOT_FOUND, 0);
 		return STATUS_NOT_FOUND;
 	}
 
+	DiagSetStage(InjectionDiagnosticStageQueueApc);
 	ULONG queued_apcs = 0;
 	NTSTATUS last_status = STATUS_NOT_FOUND;
 	for (size_t i = 0; i < process_info.number_of_threads; i++) {
 		PKTHREAD target_thread = nullptr;
 		status = PsLookupThreadByThreadId((HANDLE)process_info.threads_id[i], &target_thread);
 		if (!NT_SUCCESS(status)) {
+			DiagNoteThreadLookupFailure(process_info.threads_id[i], status);
 			last_status = status;
 			continue;
 		}
 
 		status = call_apc(target_thread, ApcRoutine, ApcContext);
+		DiagNoteApcQueueResult(process_info.threads_id[i], status);
 		if (NT_SUCCESS(status)) {
 			queued_apcs++;
 		}
