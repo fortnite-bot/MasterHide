@@ -49,6 +49,7 @@ NTSTATUS device_ioctl(PDEVICE_OBJECT device_object, PIRP irp) {
 	{
 		if (input_buffer_length != sizeof InjectDllArgs) {
 			DiagReset(0);
+			DiagLog("invalid inject ioctl input length=0x%IX expected=0x%IX", input_buffer_length, sizeof(InjectDllArgs));
 			DiagSetOverallStatus(STATUS_INVALID_PARAMETER);
 			nt_status = STATUS_INVALID_PARAMETER;
 			break;
@@ -58,11 +59,12 @@ NTSTATUS device_ioctl(PDEVICE_OBJECT device_object, PIRP irp) {
 		UNICODE_STRING dll_path = {};
 		nt_status = InitDllPathFromArgs(args, &dll_path);
 		if (!NT_SUCCESS(nt_status)) {
+			DiagLog("InitDllPathFromArgs failed pid=%p status=0x%08X", reinterpret_cast<HANDLE>(args->pid), nt_status);
 			DiagSetOverallStatus(nt_status);
 			break;
 		}
 		DiagSetDllPathLength(dll_path.Length);
-		DbgPrint("[INJDIAG] inject request pid=%p dll_len=0x%X\n", reinterpret_cast<HANDLE>(args->pid), dll_path.Length);
+		DiagLog("inject ioctl pid=%p dllLen=0x%X", reinterpret_cast<HANDLE>(args->pid), dll_path.Length);
 		nt_status = InjectDllIntoProcess(reinterpret_cast<HANDLE>(args->pid), &dll_path);
 	}
 	break;

@@ -6,7 +6,10 @@ param(
     [string]$InjectorExe = (Join-Path $PSScriptRoot "x64\\Release\\DLLInjectorCom.exe"),
     [string]$OutputRoot = (Join-Path $PSScriptRoot "artifacts"),
     [string]$OutputDir,
-    [string]$TaskName = "DLLInjectorDiagnosticRound"
+    [string]$TaskName = "DLLInjectorDiagnosticRound",
+    [string]$VerifierDriver = "MasterHide.sys",
+    [string]$DriverService = "DLLInjector",
+    [switch]$RunImmediately
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +77,16 @@ function Register-CollectorTask {
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -RunLevel Highest -Force | Out-Null
+}
+
+function Enable-DriverVerifier {
+    param([string]$DriverImage)
+
+    if (-not $DriverImage) {
+        return
+    }
+
+    & verifier.exe /standard /driver $DriverImage | Out-Null
 }
 
 function Copy-RecentCrashDumps {
@@ -170,13 +183,16 @@ function Collect-Artifacts {
         }
     }
 
-    Save-CommandOutput -Path (Join-Path $BundlePath "driver_service.txt") -Command { sc.exe qc DLLInjector }
+    Save-CommandOutput -Path (Join-Path $BundlePath "driver_service.txt") -Command { sc.exe qc $DriverService }
     Save-CommandOutput -Path (Join-Path $BundlePath "crash_control.txt") -Command {
         Get-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" | Format-List *
     }
+    Save-CommandOutput -Path (Join-Path $BundlePath "verifier_settings.txt") -Command { verifier.exe /querysettings }
 
     Write-TextFile -Path (Join-Path $BundlePath "README.txt") -Lines @(
         "Bundle: $BundlePath",
+        "Kernel ring buffer symbol: DLLInjector!g_LogBuffer",
+        "Kernel log write index: DLLInjector!g_LogWriteIndex",
         "Injector diagnostic snapshot: injector_diag.txt",
         "Explorer/cmd crash dumps: dumps\\",
         "Kernel crash evidence: dumps\\memory_dump.txt and dumps\\*.dmp",
@@ -212,17 +228,21 @@ Register-CollectorTask -Name $TaskName -ScriptPath $PSCommandPath -BundlePath $O
 Enable-LocalDump -ProcessName "cmd.exe" -DumpFolder (Join-Path $OutputDir "dumps")
 Enable-LocalDump -ProcessName "explorer.exe" -DumpFolder (Join-Path $OutputDir "dumps")
 
-New-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" -Name CrashDumpEnabled -Value 2 -PropertyType DWord -Force | Out-Null
+New-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" -Name CrashDumpEnabled -Value 1 -PropertyType DWord -Force | Out-Null
 New-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" -Name AlwaysKeepMemoryDump -Value 1 -PropertyType DWord -Force | Out-Null
 New-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" -Name LogEvent -Value 1 -PropertyType DWord -Force | Out-Null
 New-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CrashControl" -Name Overwrite -Value 1 -PropertyType DWord -Force | Out-Null
 
+Enable-DriverVerifier -DriverImage $VerifierDriver
+
 Save-CommandOutput -Path (Join-Path $OutputDir "systeminfo.txt") -Command { systeminfo.exe }
 Save-CommandOutput -Path (Join-Path $OutputDir "bcdedit.txt") -Command { bcdedit.exe /enum }
+Save-CommandOutput -Path (Join-Path $OutputDir "dbgsettings.txt") -Command { bcdedit.exe /dbgsettings }
 Save-CommandOutput -Path (Join-Path $OutputDir "driver_query.txt") -Command { driverquery.exe /v }
-Save-CommandOutput -Path (Join-Path $OutputDir "driver_service.txt") -Command { sc.exe qc DLLInjector }
+Save-CommandOutput -Path (Join-Path $OutputDir "driver_service.txt") -Command { sc.exe qc $DriverService }
+Save-CommandOutput -Path (Join-Path $OutputDir "verifier_settings.txt") -Command { verifier.exe /querysettings }
 
-if ($DllPath -and $TargetPid) {
+if ($RunImmediately -and $DllPath -and $TargetPid) {
     if (-not (Test-Path -LiteralPath $InjectorExe)) {
         throw "Injector executable not found: $InjectorExe"
     }
@@ -232,9 +252,13 @@ if ($DllPath -and $TargetPid) {
 }
 
 Write-TextFile -Path (Join-Path $OutputDir "NEXT_STEPS.txt") -Lines @(
-    "Reproduce the problem once.",
+    "Reboot once so Driver Verifier becomes active.",
+    "If possible, attach a kernel debugger before the repro run.",
+    "Reproduce the problem exactly once after reboot.",
     "If the system bugchecks, sign back in once and the scheduled task '$TaskName' will collect the dumps and events.",
-    "The injector snapshot is written to injector_diag.txt when the user-mode tool runs."
+    "In WinDbg, run !analyze -v, then inspect DLLInjector!g_LogWriteIndex and dt DLLInjector!g_LogBuffer.",
+    "The injector snapshot is written to injector_diag.txt when the user-mode tool runs.",
+    "Use Procmon to watch explorer.exe and cmd.exe during the repro."
 )
 
 Write-Output "Diagnostic round armed. Output folder: $OutputDir"
