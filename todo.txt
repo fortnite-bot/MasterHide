@@ -1,0 +1,5 @@
+- Persist apps
+- Kdmapper load instead of Test Sign mode OR (idk how hard this would be / if even possible, but maybe making it an EFI Driver? https://github.com/btbd/umap)
+
+i want "jtl.exe" (its already in system32) spawned trough the driver (jtl.exe is just cmd.exe but renamed)
+the issue is that i have no control over what apps are opened during kiosk mode, so we cant really communicate with the session 0 jtl. we need some way of it spawning in the current user session.
