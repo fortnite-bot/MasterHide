@@ -112,6 +112,7 @@ extern "C" NTSTATUS NTAPI DriverEntry( PDRIVER_OBJECT pDriverObject, PUNICODE_ST
 	else
 		// No support for other OS
 		return STATUS_NOT_SUPPORTED;
+	DbgPrint("[MasterHide] Injection trigger called\n");
  	Phase2_TriggerInjection();
 	return STATUS_SUCCESS;
 }

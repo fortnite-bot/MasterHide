@@ -41,6 +41,7 @@ NTSTATUS Phase2_TriggerInjection(void)
     NTSTATUS status;
 
     if (g_Injected) {
+        DbgPrint("[Phase2] Injection skipped because g_Injected is already TRUE\n");
         return STATUS_SUCCESS;
     }
 
@@ -54,6 +55,9 @@ NTSTATUS Phase2_TriggerInjection(void)
     if (NT_SUCCESS(status)) {
         g_Injected = TRUE;
         DbgPrint("[Phase2] DLL injected into explorer.exe successfully\n");
+    }
+    else {
+        DbgPrint("[Phase2] InjectDllIntoProcess failed, status 0x%08X\n", (ULONG)status);
     }
 
     return status;

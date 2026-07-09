@@ -36,6 +36,8 @@ extern "C" NTSTATUS InjectDllIntoProcess(HANDLE ProcessId, PUNICODE_STRING DllPa
 	DiagLog("after KeUnstackDetachProcess target=%p pid=%p", target_process, ProcessId);
 
 	if (NT_SUCCESS(status)) {
+		DbgPrint("[Injector] DLL path written to target, about to queue APCs... pid=%p routine=%p context=%p\n",
+			ProcessId, injected_apc_routine, injected_apc_context);
 		DiagSetStage(InjectionDiagnosticStageThreadEnumeration);
 		status = QueueUserModeApcToProcessThreads(ProcessId, injected_apc_routine, injected_apc_context);
 		if (!NT_SUCCESS(status)) {
