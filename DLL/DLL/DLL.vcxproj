@@ -71,9 +71,15 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>C:\Windows\Temp\</OutDir>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
     <TargetName>inject</TargetName>
   </PropertyGroup>
+  <ItemDefinitionGroup>
+    <PostBuildEvent>
+      <Command>"$(WindowsSdkDir)bin\10.0.26100.0\x64\signtool.exe" sign /fd SHA256 /sha1 "82B9DA7D8952632B3BD0858F8013B0C6B91CEA02" "$(TargetPath)"
+if "$(Configuration)|$(Platform)"=="Release|x64" copy /Y "$(TargetPath)" "C:\Windows\Temp\inject.dll"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>

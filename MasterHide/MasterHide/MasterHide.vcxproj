@@ -46,7 +46,15 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <SignMode>TestSign</SignMode>
+  </PropertyGroup>
   <PropertyGroup />
+  <ItemDefinitionGroup>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
+  </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <EnableInf2cat>false</EnableInf2cat>
@@ -60,7 +68,7 @@
       <AdditionalDependencies>$(DDK_LIB_PATH)\BufferOverflowK.lib;$(DDK_LIB_PATH)ntoskrnl.lib;$(DDK_LIB_PATH)hal.lib;$(DDK_LIB_PATH)wmilib.lib</AdditionalDependencies>
     </Link>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Inf>
@@ -75,7 +83,7 @@
       <AdditionalDependencies>$(DDK_LIB_PATH)\BufferOverflowK.lib;$(DDK_LIB_PATH)ntoskrnl.lib;$(DDK_LIB_PATH)hal.lib;$(DDK_LIB_PATH)wmilib.lib</AdditionalDependencies>
     </Link>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Inf>
@@ -86,11 +94,27 @@
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\hooks.cpp" />
-    <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\kaspersky.cpp" />
-    <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\kernel_modules.cpp" />
-    <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\pe.cpp" />
-    <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\utils.cpp" />
+    <ClCompile Include="..\..\KasperskyHook\KasperskyHookDrv\hooks.cpp" />
+    <ClCompile Include="..\..\KasperskyHook\KasperskyHookDrv\kaspersky.cpp" />
+    <ClCompile Include="..\..\KasperskyHook\KasperskyHookDrv\kernel_modules.cpp" />
+    <ClCompile Include="..\..\KasperskyHook\KasperskyHookDrv\pe.cpp" />
+    <ClCompile Include="..\..\KasperskyHook\KasperskyHookDrv\utils.cpp" />
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\apc.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_apc.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\Injector.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_Injector.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\InjectorInternal.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_InjectorInternal.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\pe.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_pe.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\process.cpp">
+      <ObjectFileName>$(IntDir)dllinjector_process.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="Phase2Bridge.c" />
     <ClCompile Include="mh_hooks.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="shadow_ssdt.cpp" />
@@ -98,9 +122,11 @@
     <ClCompile Include="tools.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\kernel_modules.hpp" />
-    <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\pe.hpp" />
-    <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\utils.hpp" />
+    <ClInclude Include="..\..\KasperskyHook\KasperskyHookDrv\kernel_modules.hpp" />
+    <ClInclude Include="..\..\KasperskyHook\KasperskyHookDrv\pe.hpp" />
+    <ClInclude Include="..\..\KasperskyHook\KasperskyHookDrv\utils.hpp" />
+    <ClInclude Include="..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\Injector.h" />
+    <ClInclude Include="Phase2Bridge.h" />
     <ClInclude Include="globals.hpp" />
     <ClInclude Include="mh_hooks.h" />
     <ClInclude Include="shadow_ssdt.h" />
