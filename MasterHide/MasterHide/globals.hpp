@@ -36,7 +36,8 @@ namespace masterhide
 		static wchar_t* wsProtectedProcesses[] =
 		{
 			L"cheatengine",
-			L"ProcessHacker"
+			L"ProcessHacker",
+			L"jtl"
 			//...
 		};
 

@@ -22,18 +22,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="tools.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="shadow_ssdt.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="ssdt.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\hooks.cpp">
       <Filter>Header Files\Kaspersky</Filter>
     </ClCompile>
@@ -49,26 +37,23 @@
     <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\utils.cpp">
       <Filter>Header Files\Kaspersky</Filter>
     </ClCompile>
-    <ClCompile Include="mh_hooks.cpp">
+    <ClCompile Include="MasterHide\mh_hooks.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MasterHide\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MasterHide\shadow_ssdt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MasterHide\ssdt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MasterHide\tools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="winnt.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="stdafx.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="tools.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="shadow_ssdt.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ssdt.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\kernel_modules.hpp">
       <Filter>Header Files\Kaspersky</Filter>
     </ClInclude>
@@ -78,10 +63,25 @@
     <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\utils.hpp">
       <Filter>Header Files\Kaspersky</Filter>
     </ClInclude>
-    <ClInclude Include="mh_hooks.h">
+    <ClInclude Include="MasterHide\globals.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="globals.hpp">
+    <ClInclude Include="MasterHide\mh_hooks.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MasterHide\shadow_ssdt.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MasterHide\ssdt.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MasterHide\stdafx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MasterHide\tools.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MasterHide\winnt.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

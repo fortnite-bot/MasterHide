@@ -18,25 +18,26 @@
     <Configuration>Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
     <RootNamespace>MasterHide</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.18362.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <TargetVersion>Windows7</TargetVersion>
+    <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Desktop</DriverTargetPlatform>
+    <KmdfVersion>1.15</KmdfVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <TargetVersion>Windows7</TargetVersion>
+    <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
     <DriverTargetPlatform>Desktop</DriverTargetPlatform>
-    <_NT_TARGET_VERSION>0x0601</_NT_TARGET_VERSION>
+    <KmdfVersion>1.15</KmdfVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -49,10 +50,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <EnableInf2cat>false</EnableInf2cat>
+    <DisableProductionSignDebugWarnings>true</DisableProductionSignDebugWarnings>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <EnableInf2cat>false</EnableInf2cat>
+    <DisableProductionSignDebugWarnings>true</DisableProductionSignDebugWarnings>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Link>
@@ -60,6 +63,7 @@
     </Link>
     <ClCompile>
       <AdditionalIncludeDirectories>..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Inf>
       <SpecifyArchitecture>false</SpecifyArchitecture>
@@ -67,6 +71,9 @@
       <SpecifyDriverVerDirectiveDate>false</SpecifyDriverVerDirectiveDate>
       <AdditionalOptions />
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA1</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Link>
@@ -74,10 +81,14 @@
     </Link>
     <ClCompile>
       <AdditionalIncludeDirectories>..\KasperskyHook\KasperskyHookDrv;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Inf>
       <SpecifyArchitecture>false</SpecifyArchitecture>
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA1</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
@@ -88,23 +99,23 @@
     <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\kernel_modules.cpp" />
     <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\pe.cpp" />
     <ClCompile Include="..\KasperskyHook\KasperskyHookDrv\utils.cpp" />
-    <ClCompile Include="mh_hooks.cpp" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="shadow_ssdt.cpp" />
-    <ClCompile Include="ssdt.cpp" />
-    <ClCompile Include="tools.cpp" />
+    <ClCompile Include="MasterHide\mh_hooks.cpp" />
+    <ClCompile Include="MasterHide\main.cpp" />
+    <ClCompile Include="MasterHide\shadow_ssdt.cpp" />
+    <ClCompile Include="MasterHide\ssdt.cpp" />
+    <ClCompile Include="MasterHide\tools.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\kernel_modules.hpp" />
     <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\pe.hpp" />
     <ClInclude Include="..\KasperskyHook\KasperskyHookDrv\utils.hpp" />
-    <ClInclude Include="globals.hpp" />
-    <ClInclude Include="mh_hooks.h" />
-    <ClInclude Include="shadow_ssdt.h" />
-    <ClInclude Include="ssdt.h" />
-    <ClInclude Include="stdafx.h" />
-    <ClInclude Include="tools.h" />
-    <ClInclude Include="winnt.h" />
+    <ClInclude Include="MasterHide\globals.hpp" />
+    <ClInclude Include="MasterHide\mh_hooks.h" />
+    <ClInclude Include="MasterHide\shadow_ssdt.h" />
+    <ClInclude Include="MasterHide\ssdt.h" />
+    <ClInclude Include="MasterHide\stdafx.h" />
+    <ClInclude Include="MasterHide\tools.h" />
+    <ClInclude Include="MasterHide\winnt.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

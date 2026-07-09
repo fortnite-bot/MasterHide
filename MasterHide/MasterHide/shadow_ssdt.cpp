@@ -48,45 +48,35 @@ bool HookSSSDT( PUCHAR pCode, ULONG ulCodeSize, PVOID pNewFunction, PVOID* pOldF
 
 	ULONGLONG				W32pServiceTable = 0, qwTemp = 0;
 	LONG 					dwTemp = 0;
-	KIRQL					irql;
 
-	//
-	// Log the Syscall number that we're hooking
-	//
 	DBGPRINT( "[ HookSSSDT ] Syscall: 0x%X\n", SyscallNum );
 
-	//
-	// Log the Original function address
-	//
 	*pOldFunction = PVOID( GetSSSDTFuncCurAddr64( SyscallNum ) );
 	DBGPRINT( "[ HookSSSDT ] Original: 0x%p\n", *pOldFunction );
 
 	*( PULONG64 )( jmp_trampoline + 3 ) = ULONG64( pNewFunction );
 
-	//
-	// Find a suitable code cave inside the module .text section that we can use to trampoline to our hook
-	//
-	auto pCodeCave = utils::FindCodeCave( pCode, ulCodeSize, sizeof( jmp_trampoline ) );
+	const ULONG trampolineSize = sizeof( jmp_trampoline );
+
+	// Search for code cave, skipping first 0x1000 bytes to avoid overwriting critical code
+	DBGPRINT( "[ HookSSSDT ] Searching for code cave (offset 0x1000)...\n" );
+	auto pCodeCave = utils::FindCodeCave( pCode + 0x1000, ulCodeSize - 0x1000, trampolineSize );
 	if ( !pCodeCave )
 	{
 		DBGPRINT( "[ HookSSSDT ] Failed to find a suitable code cave.\n" );
 		return false;
 	}
-
 	DBGPRINT( "[ HookSSSDT ] Code Cave: 0x%p\n", pCodeCave );
 
-	//
-	// Change page protection
-	//
-	auto Mdl = IoAllocateMdl( pCodeCave, sizeof( jmp_trampoline ), 0, 0, NULL );
+	// --- MDL for code cave ---
+	auto Mdl = IoAllocateMdl( pCodeCave, trampolineSize, 0, 0, NULL );
 	if ( Mdl == NULL )
 	{
 		DBGPRINT( "[ HookSSSDT ] IoAllocateMdl failed!\n" );
 		return false;
 	}
 
-	MmProbeAndLockPages( Mdl, KernelMode, IoWriteAccess );
-
+	MmProbeAndLockPages( Mdl, KernelMode, IoReadAccess );
 	auto Mapping = MmMapLockedPagesSpecifyCache( Mdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority );
 	if ( Mapping == NULL )
 	{
@@ -96,29 +86,44 @@ bool HookSSSDT( PUCHAR pCode, ULONG ulCodeSize, PVOID pNewFunction, PVOID* pOldF
 		return false;
 	}
 
-	//
-	// Modify SSSDT table
-	//
-	irql = utils::WPOFF();
+	// Copy trampoline into the code cave via writable mapping (no CR0 change)
+	RtlCopyMemory( Mapping, jmp_trampoline, trampolineSize );
 
-	RtlCopyMemory( Mapping, jmp_trampoline, sizeof( jmp_trampoline ) );
-
+	// ---- Compute new Shadow SSDT entry value ----
 	W32pServiceTable = ( ULONGLONG )( g_KeServiceDescriptorTableShadow->ServiceTableBase );
 	qwTemp = W32pServiceTable + 4 * ( SyscallNum - 0x1000 );
 	dwTemp = ( LONG )( ( ULONG64 )pCodeCave - W32pServiceTable );
 	dwTemp = dwTemp << 4;
 
-	*( PLONG )qwTemp = dwTemp;
+	// ---- MDL‑map the SSSDT entry itself to make it writable ----
+	MDL* pSsdtMdl = IoAllocateMdl( (PVOID)qwTemp, sizeof(LONG), FALSE, FALSE, NULL );
+	if ( pSsdtMdl )
+	{
+		MmProbeAndLockPages( pSsdtMdl, KernelMode, IoReadAccess );
+		PLONG pMappedSsdt = (PLONG)MmMapLockedPagesSpecifyCache( pSsdtMdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority );
+		if ( pMappedSsdt )
+		{
+			*pMappedSsdt = dwTemp;      // safe write to the SSSDT entry
+			MmUnmapLockedPages( pMappedSsdt, pSsdtMdl );
+		}
+		else
+		{
+			DBGPRINT( "[ HookSSSDT ] MmMapLockedPagesSpecifyCache for SSSDT failed!\n" );
+		}
+		MmUnlockPages( pSsdtMdl );
+		IoFreeMdl( pSsdtMdl );
+	}
+	else
+	{
+		DBGPRINT( "[ HookSSSDT ] IoAllocateMdl for SSSDT failed!\n" );
+	}
 
-	utils::WPON( irql );
-
-	//
-	// Restore protection
-	//
+	// Cleanup code cave mappings
 	MmUnmapLockedPages( Mapping, Mdl );
 	MmUnlockPages( Mdl );
 	IoFreeMdl( Mdl );
 
+	DBGPRINT( "[ HookSSSDT ] HookSSSDT complete.\n" );
 	return true;
 }
 
@@ -129,19 +134,29 @@ bool UnhookSSSDT( PVOID pFunction, ULONG SyscallNum )
 
 	ULONGLONG				W32pServiceTable = 0, qwTemp = 0;
 	LONG 					dwTemp = 0;
-	KIRQL					irql;
-
-	irql = utils::WPOFF();
 
 	W32pServiceTable = ( ULONGLONG )( g_KeServiceDescriptorTableShadow->ServiceTableBase );
 	qwTemp = W32pServiceTable + 4 * ( SyscallNum - 0x1000 );
 	dwTemp = ( LONG )( ( ULONG64 )pFunction - W32pServiceTable );
 	dwTemp = dwTemp << 4;
 
-	*( PLONG )qwTemp = dwTemp;
+	// ---- MDL‑map the SSSDT entry to make it writable ----
+	MDL* pSsdtMdl = IoAllocateMdl( (PVOID)qwTemp, sizeof(LONG), FALSE, FALSE, NULL );
+	if ( pSsdtMdl )
+	{
+		MmProbeAndLockPages( pSsdtMdl, KernelMode, IoReadAccess );
+		PLONG pMappedSsdt = (PLONG)MmMapLockedPagesSpecifyCache( pSsdtMdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority );
+		if ( pMappedSsdt )
+		{
+			*pMappedSsdt = dwTemp;      // safe write to the SSSDT entry
+			MmUnmapLockedPages( pMappedSsdt, pSsdtMdl );
+		}
+		MmUnlockPages( pSsdtMdl );
+		IoFreeMdl( pSsdtMdl );
+	}
+	// ----------------------------------------------------
 
-	utils::WPON( irql );
-
+	DBGPRINT( "[ UnhookSSSDT ] UnhookSSSDT complete.\n" );
 	return true;
 }
 

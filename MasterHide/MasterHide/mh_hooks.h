@@ -1,27 +1,25 @@
 #pragma once
 
-//HARDCODED for Windows 7 x64 SP1 7601
+//
+// Shadow SSDT (Win32k) syscall indices – already correct for 19045
+//
+static auto SYSCALL_NTUSERFINDWNDEX       = 0x106E;
+static auto SYSCALL_NTUSERWNDFROMPOINT    = 0x1014;
+static auto SYSCALL_NTUSERBUILDWNDLIST    = 0x101C;
+static auto SYSCALL_NTGETFOREGROUNDWND    = 0x103C;
+static auto SYSCALL_NTUSERQUERYWND        = 0x1010;
 
 //
-// ntoskrnl.exe
+// Native SSDT (ntoskrnl) syscall indices – FIXED for Windows 10 19045
+// (Based on the SSDT dump for build 19041 – identical for 19045)
 //
-static auto SYSCALL_NTUSERFINDWNDEX = 0x106e;
-static auto SYSCALL_NTUSERWNDFROMPOINT = 0x1014;
-static auto SYSCALL_NTUSERBUILDWNDLIST = 0x101c;
-static auto SYSCALL_NTGETFOREGROUNDWND = 0x103c;
-static auto SYSCALL_NTUSERQUERYWND = 0x1010;
-
-//
-// win32k.sys
-//
-static auto SYSCALL_NTQUERYSYSINFO = 0x0033;
-static auto SYSCALL_NTOPENPROCESS = 0x0023;
-static auto SYSCALL_NTALLOCVIRTUALMEM = 0x0015;
-static auto SYSCALL_NTWRITEVIRTUALMEM = 0x0037;
-static auto SYSCALL_NTFREEVIRTUALMEM = 0x001b;
-static auto SYSCALL_NTDEVICEIOCTRLFILE = 0x0004;
-static auto SYSCALL_NTLOADDRIVER = 0x0004;
-
+static auto SYSCALL_NTQUERYSYSINFO        = 0x0036;  // NtQuerySystemInformation
+static auto SYSCALL_NTOPENPROCESS         = 0x0026;  // NtOpenProcess
+static auto SYSCALL_NTALLOCVIRTUALMEM     = 0x0018;  // NtAllocateVirtualMemory
+static auto SYSCALL_NTWRITEVIRTUALMEM     = 0x003A;  // NtWriteVirtualMemory
+static auto SYSCALL_NTFREEVIRTUALMEM      = 0x001E;  // NtFreeVirtualMemory
+static auto SYSCALL_NTDEVICEIOCTRLFILE    = 0x0007;  // NtDeviceIoControlFile
+static auto SYSCALL_NTLOADDRIVER          = 0x0106;  // NtLoadDriver
 namespace masterhide
 {
 	namespace tools

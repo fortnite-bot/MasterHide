@@ -542,149 +542,199 @@ NTSTATUS NTAPI hkNtDeviceIoControlFile( HANDLE FileHandle, HANDLE Event, PIO_APC
 }
 
 NtQuerySystemInformation_ oNtQuerySystemInformation = NULL;
-NTSTATUS NTAPI hkNtQuerySystemInformation( SYSTEM_INFORMATION_CLASS SystemInformationClass, PVOID Buffer, ULONG Length, PULONG ReturnLength )
+// Global recursion guard
+static volatile LONG g_HookActive = 0;
+
+NTSTATUS NTAPI hkNtQuerySystemInformation(
+    SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    PVOID Buffer,
+    ULONG Length,
+    PULONG ReturnLength )
 {
-	const auto ret = oNtQuerySystemInformation( SystemInformationClass, Buffer, Length, ReturnLength );
+    DBGPRINT("[HkQSI] >>> ENTER: class=0x%X, Buffer=0x%p, Length=0x%X\n",
+             SystemInformationClass, Buffer, Length);
 
-	//
-	// If the callee process is a protected process we ignore it
-	//
-	if ( tools::IsProtectedProcess( PsGetCurrentProcessId() ) )
-		return ret;
+    LONG wasActive = InterlockedExchange(&g_HookActive, 1);
+    DBGPRINT("[HkQSI] Recursion guard was %d\n", wasActive);
+    if (wasActive) {
+        DBGPRINT("[HkQSI] !! REENTRY !! – calling original directly.\n");
+        NTSTATUS r = oNtQuerySystemInformation(SystemInformationClass, Buffer, Length, ReturnLength);
+        DBGPRINT("[HkQSI] REENTRY return 0x%X\n", r);
+        return r;
+    }
 
-	if ( NT_SUCCESS( ret ) )
-	{
-		//
-		// Hide from Driver list
-		// 
-		if ( SystemInformationClass == SystemModuleInformation )
-		{
-			const auto pModule = PRTL_PROCESS_MODULES( Buffer );
-			const auto pEntry = &pModule->Modules[ 0 ];
+    DBGPRINT("[HkQSI] Calling original oNtQuerySystemInformation...\n");
+    NTSTATUS ret = oNtQuerySystemInformation(SystemInformationClass, Buffer, Length, ReturnLength);
+    DBGPRINT("[HkQSI] Original returned 0x%X, ReturnLength=0x%X\n",
+             ret, ReturnLength ? *ReturnLength : 0);
 
-			for ( unsigned i = 0; i < pModule->NumberOfModules; ++i )
-			{
-				if ( pEntry[ i ].ImageBase && pEntry[ i ].ImageSize && strlen( ( char* )pEntry[ i ].FullPathName ) > 2 )
-				{
-					for ( int x = 0; x < ARRAYSIZE( globals::szProtectedDrivers ); ++x )
-					{
-						if ( strstr( ( char* )pEntry[ i ].FullPathName, globals::szProtectedDrivers[ x ] ) )
-						{
-							const auto next_entry = i + 1;
+    HANDLE curPid = PsGetCurrentProcessId();
+    DBGPRINT("[HkQSI] Current PID = %p\n", curPid);
+    if (tools::IsProtectedProcess(curPid)) {
+        DBGPRINT("[HkQSI] Caller is protected → skipping filter.\n");
+        InterlockedExchange(&g_HookActive, 0);
+        return ret;
+    }
 
-							if ( next_entry < pModule->NumberOfModules )
-								memcpy( &pEntry[ i ], &pEntry[ next_entry ], sizeof( RTL_PROCESS_MODULE_INFORMATION ) );
-							else
-							{
-								memset( &pEntry[ i ], 0, sizeof( RTL_PROCESS_MODULE_INFORMATION ) );
-								pModule->NumberOfModules--;
-							}
-						}
-					}
-				}
-			}
-		}
-		//
-		// Hide from Process list
-		//
-		else if (
-			SystemInformationClass == SystemProcessInformation ||
-			SystemInformationClass == SystemSessionProcessInformation ||
-			SystemInformationClass == SystemExtendedProcessInformation )
-		{
-			PSYSTEM_PROCESS_INFO pCurr = NULL;
-			PSYSTEM_PROCESS_INFO pNext = PSYSTEM_PROCESS_INFO( Buffer );
+    if (!NT_SUCCESS(ret)) {
+        DBGPRINT("[HkQSI] Original call failed → no filter.\n");
+        InterlockedExchange(&g_HookActive, 0);
+        return ret;
+    }
 
-			while ( pNext->NextEntryOffset != 0 )
-			{
-				pCurr = pNext;
-				pNext = ( PSYSTEM_PROCESS_INFO )( ( PUCHAR )pCurr + pCurr->NextEntryOffset );
+    __try {
 
-				//
-				// Erase our protected processes from the list
-				//
-				if ( pNext->ImageName.Buffer && tools::IsProtectedProcess( pNext->ImageName.Buffer ) )
-				{
-					if ( pNext->NextEntryOffset == 0 )
-					{
-						pCurr->NextEntryOffset = 0;
-					}
-					else
-					{
-						pCurr->NextEntryOffset += pNext->NextEntryOffset;
-					}
+    // -------- SystemModuleInformation --------
+    if (SystemInformationClass == SystemModuleInformation) {
+        DBGPRINT("[HkQSI] MODULE INFO: checking buffer...\n");
+        if (Length < sizeof(RTL_PROCESS_MODULES)) {
+            DBGPRINT("[HkQSI] MODULE: Buffer too small, skipping.\n");
+            __leave;
+        }
+        auto pModule = (PRTL_PROCESS_MODULES)Buffer;
+        DBGPRINT("[HkQSI] MODULE: NumberOfModules=%u\n", pModule->NumberOfModules);
+        for (ULONG i = 0; i < pModule->NumberOfModules; i++) {
+            DBGPRINT("[HkQSI] MODULE [%u]: %s\n", i, pModule->Modules[i].FullPathName);
+            for (int x = 0; x < ARRAYSIZE(globals::szProtectedDrivers); x++) {
+                DBGPRINT("[HkQSI] MODULE: checking against '%s'\n", globals::szProtectedDrivers[x]);
+                if (strstr((char*)pModule->Modules[i].FullPathName, globals::szProtectedDrivers[x])) {
+                    DBGPRINT("[HkQSI] MODULE: MATCH! Removing entry %u.\n", i);
+                    if ((i + 1) < pModule->NumberOfModules) {
+                        DBGPRINT("[HkQSI] MODULE: memcpy from %u to %u (%u bytes)\n",
+                                 i+1, i, (pModule->NumberOfModules - i - 1) * sizeof(RTL_PROCESS_MODULE_INFORMATION));
+                        RtlMoveMemory(&pModule->Modules[i], &pModule->Modules[i+1],
+                                      (pModule->NumberOfModules - i - 1) * sizeof(RTL_PROCESS_MODULE_INFORMATION));
+                    }
+                    RtlZeroMemory(&pModule->Modules[pModule->NumberOfModules - 1], sizeof(RTL_PROCESS_MODULE_INFORMATION));
+                    pModule->NumberOfModules--;
+                    i--;
+                    break;
+                }
+            }
+        }
+        DBGPRINT("[HkQSI] MODULE: done.\n");
+    }
 
-					pNext = pCurr;
-				}
-			}
-		}
-		//
-		// Hide from handle list
-		//
-		else if ( SystemInformationClass == SystemHandleInformation )
-		{
-			if ( tools::IsBlacklistedProcess( PsGetCurrentProcessId() ) )
-			{
-				const auto pHandle = PSYSTEM_HANDLE_INFORMATION( Buffer );
-				const auto pEntry = &pHandle->Information[ 0 ];
+    // -------- Process lists --------
+    else if (SystemInformationClass == SystemProcessInformation ||
+             SystemInformationClass == SystemSessionProcessInformation ||
+             SystemInformationClass == SystemExtendedProcessInformation) {
+        DBGPRINT("[HkQSI] PROCESS LIST: class=0x%X, Buffer=0x%p, Length=0x%X\n",
+                 SystemInformationClass, Buffer, Length);
+        if (Length < sizeof(SYSTEM_PROCESS_INFO)) {
+            DBGPRINT("[HkQSI] PROCESS LIST: Buffer too small, leaving.\n");
+            __leave;
+        }
+        PSYSTEM_PROCESS_INFO pCurr = NULL;
+        PSYSTEM_PROCESS_INFO pNext = (PSYSTEM_PROCESS_INFO)Buffer;
+        ULONG_PTR bufEnd = (ULONG_PTR)Buffer + Length;
+        DBGPRINT("[HkQSI] PROCESS LIST: first entry at 0x%p\n", pNext);
 
-				for ( unsigned i = 0; i < pHandle->NumberOfHandles; ++i )
-				{
-					if ( tools::IsProtectedProcess( ULongToHandle( pEntry[ i ].ProcessId ) ) )
-					{
-						const auto next_entry = i + 1;
+        if (pNext->ImageName.Buffer) {
+            DBGPRINT("[HkQSI] PROCESS LIST: first entry ImageName=%wZ\n", &pNext->ImageName);
+            if (tools::IsProtectedProcess(pNext->ImageName.Buffer)) {
+                DBGPRINT("[HkQSI] PROCESS LIST: first entry IS protected.\n");
+            }
+        }
 
-						if ( next_entry < pHandle->NumberOfHandles )
-							memcpy( &pEntry[ i ], &pEntry[ next_entry ], sizeof( SYSTEM_HANDLE ) );
-						else
-						{
-							memset( &pEntry[ i ], 0, sizeof( SYSTEM_HANDLE ) );
-							pHandle->NumberOfHandles--;
-						}
-					}
-				}
-			}
-		}
-		else if ( SystemInformationClass == SystemExtendedHandleInformation )
-		{
-			if ( tools::IsBlacklistedProcess( PsGetCurrentProcessId() ) )
-			{
-				const auto pHandle = PSYSTEM_HANDLE_INFORMATION_EX( Buffer );
-				const auto pEntry = &pHandle->Information[ 0 ];
+        ULONG loop = 0;
+        while (pNext && pNext->NextEntryOffset != 0) {
+            loop++;
+            DBGPRINT("[HkQSI] PROCESS LIST: loop %u, pCurr=0x%p, pNext=0x%p, NextEntryOffset=0x%X\n",
+                     loop, pCurr, pNext, pNext->NextEntryOffset);
+            pCurr = pNext;
+            pNext = (PSYSTEM_PROCESS_INFO)((PUCHAR)pCurr + pCurr->NextEntryOffset);
+            if ((ULONG_PTR)pNext >= bufEnd || (ULONG_PTR)pNext < (ULONG_PTR)Buffer) {
+                DBGPRINT("[HkQSI] PROCESS LIST: bounds check FAILED! 0x%p outside range. Stopping.\n", pNext);
+                break;
+            }
+            if (pNext->ImageName.Buffer) {
+                DBGPRINT("[HkQSI] PROCESS LIST: image=%wZ\n", &pNext->ImageName);
+                if (tools::IsProtectedProcess(pNext->ImageName.Buffer)) {
+                    DBGPRINT("[HkQSI] PROCESS LIST: hiding entry at 0x%p\n", pNext);
+                    if (pNext->NextEntryOffset == 0) {
+                        DBGPRINT("[HkQSI] PROCESS LIST: last entry, setting pCurr->NextEntryOffset=0.\n");
+                        pCurr->NextEntryOffset = 0;
+                    } else {
+                        DBGPRINT("[HkQSI] PROCESS LIST: skipping entry, new offset = 0x%X + 0x%X = 0x%X\n",
+                                 pCurr->NextEntryOffset, pNext->NextEntryOffset,
+                                 pCurr->NextEntryOffset + pNext->NextEntryOffset);
+                        pCurr->NextEntryOffset += pNext->NextEntryOffset;
+                    }
+                    pNext = pCurr;
+                    DBGPRINT("[HkQSI] PROCESS LIST: pNext reset to pCurr (0x%p)\n", pNext);
+                }
+            }
+        }
+        DBGPRINT("[HkQSI] PROCESS LIST: done.\n");
+    }
 
-				for ( unsigned i = 0; i < pHandle->NumberOfHandles; ++i )
-				{
-					if ( tools::IsProtectedProcess( ULongToHandle( pEntry[ i ].ProcessId ) ) )
-					{
-						const auto next_entry = i + 1;
+    // -------- Handle lists --------
+    else if (SystemInformationClass == SystemHandleInformation) {
+        DBGPRINT("[HkQSI] HANDLE INFO: checking blacklist...\n");
+        if (tools::IsBlacklistedProcess(PsGetCurrentProcessId())) {
+            auto pHandle = (PSYSTEM_HANDLE_INFORMATION)Buffer;
+            DBGPRINT("[HkQSI] HANDLE INFO: blacklisted, count=%u\n", pHandle->NumberOfHandles);
+            for (ULONG i = 0; i < pHandle->NumberOfHandles; i++) {
+                DBGPRINT("[HkQSI] HANDLE INFO: [%u] PID=%u\n", i, pHandle->Information[i].ProcessId);
+                if (tools::IsProtectedProcess(ULongToHandle(pHandle->Information[i].ProcessId))) {
+                    DBGPRINT("[HkQSI] HANDLE INFO: removing entry %u (protected)\n", i);
+                    if ((i + 1) < pHandle->NumberOfHandles) {
+                        RtlMoveMemory(&pHandle->Information[i], &pHandle->Information[i+1],
+                                      (pHandle->NumberOfHandles - i - 1) * sizeof(SYSTEM_HANDLE));
+                    }
+                    RtlZeroMemory(&pHandle->Information[pHandle->NumberOfHandles - 1], sizeof(SYSTEM_HANDLE));
+                    pHandle->NumberOfHandles--;
+                    i--;
+                    DBGPRINT("[HkQSI] HANDLE INFO: new count=%u, re-checking %u\n", pHandle->NumberOfHandles, i);
+                }
+            }
+        }
+    }
 
-						if ( next_entry < pHandle->NumberOfHandles )
-							memcpy( &pEntry[ i ], &pEntry[ next_entry ], sizeof( SYSTEM_HANDLE ) );
-						else
-						{
-							memset( &pEntry[ i ], 0, sizeof( SYSTEM_HANDLE ) );
-							pHandle->NumberOfHandles--;
-						}
-					}
-				}
-			}
-		}
-		//
-		// Spoof code integrity status
-		//
-		else if ( SystemInformationClass == SystemCodeIntegrityInformation )
-		{
-			PSYSTEM_CODEINTEGRITY_INFORMATION Integrity = PSYSTEM_CODEINTEGRITY_INFORMATION( Buffer );
+    else if (SystemInformationClass == SystemExtendedHandleInformation) {
+        DBGPRINT("[HkQSI] EXT HANDLE INFO: checking blacklist...\n");
+        if (tools::IsBlacklistedProcess(PsGetCurrentProcessId())) {
+            auto pHandle = (PSYSTEM_HANDLE_INFORMATION_EX)Buffer;
+            DBGPRINT("[HkQSI] EXT HANDLE INFO: count=%u\n", pHandle->NumberOfHandles);
+            for (ULONG i = 0; i < pHandle->NumberOfHandles; i++) {
+                DBGPRINT("[HkQSI] EXT HANDLE INFO: [%u] PID=%u\n", i, pHandle->Information[i].ProcessId);
+                if (tools::IsProtectedProcess(ULongToHandle(pHandle->Information[i].ProcessId))) {
+                    DBGPRINT("[HkQSI] EXT HANDLE INFO: removing entry %u\n", i);
+                    if ((i + 1) < pHandle->NumberOfHandles) {
+                        RtlMoveMemory(&pHandle->Information[i], &pHandle->Information[i+1],
+                                      (pHandle->NumberOfHandles - i - 1) * sizeof(SYSTEM_HANDLE));
+                    }
+                    RtlZeroMemory(&pHandle->Information[pHandle->NumberOfHandles - 1], sizeof(SYSTEM_HANDLE));
+                    pHandle->NumberOfHandles--;
+                    i--;
+                }
+            }
+        }
+    }
 
-			// Spoof test sign flag if present
-			if ( Integrity->CodeIntegrityOptions & CODEINTEGRITY_OPTION_TESTSIGN )
-				Integrity->CodeIntegrityOptions &= ~CODEINTEGRITY_OPTION_TESTSIGN;
+    // -------- Code integrity spoofing --------
+    else if (SystemInformationClass == SystemCodeIntegrityInformation) {
+        DBGPRINT("[HkQSI] CODE INTEGRITY: spoofing...\n");
+        auto Integrity = (PSYSTEM_CODEINTEGRITY_INFORMATION)Buffer;
+        DBGPRINT("[HkQSI] CODE INTEGRITY: old options=0x%X\n", Integrity->CodeIntegrityOptions);
+        if (Integrity->CodeIntegrityOptions & CODEINTEGRITY_OPTION_TESTSIGN)
+            Integrity->CodeIntegrityOptions &= ~CODEINTEGRITY_OPTION_TESTSIGN;
+        Integrity->CodeIntegrityOptions |= CODEINTEGRITY_OPTION_ENABLED;
+        DBGPRINT("[HkQSI] CODE INTEGRITY: new options=0x%X\n", Integrity->CodeIntegrityOptions);
+    }
+    else {
+        DBGPRINT("[HkQSI] Unhandled class 0x%X, no filtering.\n", SystemInformationClass);
+    }
 
-			// Set as always enabled.
-			Integrity->CodeIntegrityOptions |= CODEINTEGRITY_OPTION_ENABLED;
-		}
-	}
-	return ret;
+    } // end __try
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        DBGPRINT("[HkQSI] !!! EXCEPTION 0x%X caught in __except block !!!\n", GetExceptionCode());
+    }
+
+    DBGPRINT("[HkQSI] <<< EXIT (status 0x%X)\n", ret);
+    InterlockedExchange(&g_HookActive, 0);
+    return ret;
 }
 
 NtLoadDriver_ oNtLoadDriver = NULL;

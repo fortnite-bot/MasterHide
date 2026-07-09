@@ -19,7 +19,7 @@
 //
 // Uncomment that to use ordinary SSDT/SSSDT hooking
 //
-#define USE_KASPERSKY
+// #define USE_KASPERSKY
 
 #include "winnt.h"
 #include "globals.hpp"
