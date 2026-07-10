@@ -26,3 +26,6 @@ Failure cleanup leaks remote allocations: it uses MEM_RELEASE with a nonzero siz
 RWX allocation and undocumented RtlCreateUserThread make it fragile across mitigated/protected targets. On this host, Dynamic Code, CFG, and Microsoft-signed-only policies were off for Explorer, and ntoskrnl!RtlCreateUserThread is exported (RVA 0x90FF30), so neither is the local cause.
 
 cmd spawns very inconsistently, must turn into a working 10/10 times.
+
+Important: The DLL base address is hardcoded from your previous debug output (00007FFA8BBB0000). This will change after reboot; you’ll need to update it in the driver. For a permanent solution, we could store the base address dynamically during injection. But for a quick test, this works.
+
