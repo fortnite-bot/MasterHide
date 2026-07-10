@@ -1,5 +1,28 @@
-- Persist apps
+- Persist apps: 
+  - If explorer.exe already injected with inject.dll, it cant get re-injected again. we want to on-demand spawn cmd.exe
+  - 
 - Kdmapper load instead of Test Sign mode OR (idk how hard this would be / if even possible, but maybe making it an EFI Driver? https://github.com/btbd/umap)
 
 i want "jtl.exe" (its already in system32) spawned trough the driver (jtl.exe is just cmd.exe but renamed)
 the issue is that i have no control over what apps are opened during kiosk mode, so we cant really communicate with the session 0 jtl. we need some way of it spawning in the current user session.
+
+
+The advertised APC route cannot work. Both APC functions return STATUS_NOT_IMPLEMENTED; apc.cpp is dead code. Even its older design only queued APCs and never guaranteed alertable delivery.
+
+sc start is a false health check. [main.cpp (line 33)](/C:/Users/hallo/Downloads/MasterHide/MasterHide/MasterHide/main.cpp:33) discards the injection return status and returns driver-load success regardless.
+
+“Injection succeeded” only means the remote thread was created. [InjectorInternal.cpp (line 100)](/C:/Users/hallo/Downloads/MasterHide/windows-kernel-dll-injector/DLLInjector/DLLInjector/InjectorInternal.cpp:100) closes the thread handle immediately and never verifies the thread exit value or LoadLibraryW result.
+
+It only injects once, during DriverEntry, into the first non-session-0 explorer.exe. If Explorer is absent, restarts, or the wrong session is selected, there is no retry or persistence.
+
+Its detailed diagnostics are disconnected: DiagInitialize() is only called by the separate standalone driver, so MasterHide’s diagnostic logging/snapshot is effectively inactive.
+
+The loader resolver is fragile: unsafe PEB traversal, no loader synchronization, circular-list handling error, case-sensitive/unbounded module matching, no PE bounds checks, and no forwarded-export handling. These did not block this build: KERNEL32!LoadLibraryW is a direct export here.
+
+It is x64-only but does not enforce target/DLL architecture compatibility. That happened to match this x64 Explorer and payload.
+
+Failure cleanup leaks remote allocations: it uses MEM_RELEASE with a nonzero size. Successful injections also leave RW/RWX allocations behind.
+
+RWX allocation and undocumented RtlCreateUserThread make it fragile across mitigated/protected targets. On this host, Dynamic Code, CFG, and Microsoft-signed-only policies were off for Explorer, and ntoskrnl!RtlCreateUserThread is exported (RVA 0x90FF30), so neither is the local cause.
+
+cmd spawns very inconsistently, must turn into a working 10/10 times.

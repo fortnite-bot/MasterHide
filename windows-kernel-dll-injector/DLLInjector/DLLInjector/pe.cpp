@@ -210,7 +210,9 @@ PVOID find_symbol_address(BYTE* module_address, char* symbol_name) {
 		auto function_name_offset = *(ULONG*)(module_address + export_table->AddressOfNames + (sizeof(export_table->AddressOfNames) * i));
 		auto function_name = (char*)module_address + (size_t)function_name_offset;
 		if (0 == strcmp(function_name, symbol_name)) {
-			return module_address + *(ULONG*)(module_address + export_table->AddressOfFunctions + (sizeof(export_table->AddressOfFunctions) * i));
+			WORD ordinal = *(WORD*)(module_address + export_table->AddressOfNameOrdinals + (sizeof(WORD) * i));
+			DbgPrint("Name[%zu] %s -> ordinal %u\n", i, function_name, ordinal);
+return module_address + *(ULONG*)(module_address + export_table->AddressOfFunctions + (sizeof(ULONG) * ordinal));
 		}
 	}
 	return nullptr;

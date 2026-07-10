@@ -30,3 +30,4 @@ NTSTATUS call_apc(PKTHREAD target_thread, PVOID target_function, PVOID params) {
     }
 	return STATUS_SUCCESS;
 }
+

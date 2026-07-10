@@ -1,176 +1,340 @@
 #include "InjectorInternal.h"
 
-#include "apc.h"
 #include "diag.h"
 #include "pe.h"
 #include "process.h"
+#include <ntstrsafe.h>   // for RtlStringCbCopyW
 
-using LoadLibraryWFn = HANDLE(*)(LPCWSTR lpLibFileName);
+extern "C" NTSYSAPI NTSTATUS NTAPI ZwProtectVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ PVOID* BaseAddress,
+    _Inout_ PSIZE_T RegionSize,
+    _In_ ULONG NewProtect,
+    _Out_ PULONG OldProtect);
 
-struct UserApcArgs {
-	wchar_t dll_path[256];
-	LoadLibraryWFn load_library;
+extern "C" NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
+    _In_ HANDLE Handle,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout);
+
+static constexpr ACCESS_MASK kProcessCreateThreadAccess = 0x0002;
+static constexpr ACCESS_MASK kProcessVmOperationAccess = 0x0008;
+static constexpr ACCESS_MASK kProcessVmWriteAccess = 0x0020;
+static constexpr LONGLONG kRemoteThreadWaitTimeout100ns = -50000000LL;
+
+// ------------------------------------------------------------------
+// Shellcode: x64 stub that loads a DLL by calling LoadLibraryW and stores
+// the returned module handle in a remote result slot.
+// LoadLibraryW is patched at offset 6, the result slot at offset 18.
+// RCX contains the DLL path when the thread starts.
+static const UCHAR g_RemoteThreadShellcode[] = {
+	0x48, 0x83, 0xEC, 0x28,							// sub rsp, 28h
+	0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, 0 (patched)
+	0xFF, 0xD0,											// call rax
+	0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0 (patched)
+	0x48, 0x89, 0x02,									// mov [rdx], rax
+	0x48, 0x83, 0xC4, 0x28,							// add rsp, 28h
+	0xC3												// ret
 };
 
-static PVOID FindLoadLibraryW() {
+// Patch the shellcode with the real LoadLibraryW address and result buffer.
+static void PatchShellcode(
+    _In_ PVOID shellcodeBuffer,
+    _In_ PVOID loadLibraryAddress,
+    _In_ PVOID resultBufferAddress)
+{
+	*(PVOID*)((PUCHAR)shellcodeBuffer + 6) = loadLibraryAddress;
+	*(PVOID*)((PUCHAR)shellcodeBuffer + 18) = resultBufferAddress;
+}
+
+// ------------------------------------------------------------------
+// Look up LoadLibraryW in kernel32.dll (using the PE parser from pe.cpp)
+static PVOID FindLoadLibraryW()
+{
 	return get_module_symbol_address((wchar_t*)L"KERNEL32.DLL", (char*)"LoadLibraryW");
 }
 
-#pragma optimize("", off)
-#pragma runtime_checks("", off)
-VOID NTAPI user_mode_apc_callback(PVOID normal_context, PVOID, PVOID) {
-	auto args = static_cast<UserApcArgs*>(normal_context);
-	args->load_library(args->dll_path);
+// ---------------------------------------------------------------
+// Prototype of RtlCreateUserThread (from ntoskrnl export)
+// ---------------------------------------------------------------
+typedef NTSTATUS (NTAPI* PFN_RtlCreateUserThread)(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ BOOLEAN CreateSuspended,
+    _In_ ULONG StackZeroBits,
+    _Inout_opt_ PULONG StackReserved,
+    _Inout_opt_ PULONG StackCommit,
+    _In_ PVOID StartAddress,
+    _In_opt_ PVOID StartParameter,
+    _Out_ PHANDLE ThreadHandle,
+    _Out_ PCLIENT_ID ClientId
+);
+
+// ---------------------------------------------------------------
+// One‑time resolver for RtlCreateUserThread (exported, always available)
+// ---------------------------------------------------------------
+static PFN_RtlCreateUserThread ResolveRtlCreateUserThread()
+{
+    static PFN_RtlCreateUserThread s_pfn = NULL;
+    if (s_pfn == NULL)
+    {
+        UNICODE_STRING routineName;
+        RtlInitUnicodeString(&routineName, L"RtlCreateUserThread");
+        s_pfn = (PFN_RtlCreateUserThread)MmGetSystemRoutineAddress(&routineName);
+        if (s_pfn == NULL)
+            DiagLog("RtlCreateUserThread not found in ntoskrnl exports");
+    }
+    return s_pfn;
 }
 
-VOID NTAPI user_mode_apc_callback_end() {}
-#pragma runtime_checks("", restore)
-#pragma optimize("", on)
+// ---------------------------------------------------------------
+// Create a user‑mode thread in the target process using RtlCreateUserThread
+// ---------------------------------------------------------------
+static NTSTATUS CreateRemoteThreadInProcess(
+    _In_ PEPROCESS Process,
+    _In_ PVOID StartRoutine,
+    _In_ PVOID Argument,
+    _Out_opt_ PHANDLE ThreadHandle)
+{
+    PFN_RtlCreateUserThread pfn = ResolveRtlCreateUserThread();
+    if (pfn == NULL)
+        return STATUS_PROCEDURE_NOT_FOUND;
 
-NTSTATUS CreateTargetApcPayload(PUNICODE_STRING DllPath, PVOID* ApcRoutine, PVOID* ApcContext) {
-	if (nullptr == DllPath || nullptr == DllPath->Buffer || nullptr == ApcRoutine || nullptr == ApcContext) {
-		DiagLog("CreateTargetApcPayload invalid parameter dll=%p apcRoutine=%p apcContext=%p",
-			DllPath ? DllPath->Buffer : nullptr, ApcRoutine, ApcContext);
+    if (ThreadHandle != NULL) {
+        *ThreadHandle = NULL;
+    }
+
+    HANDLE hProcess = NULL;
+    NTSTATUS status = ObOpenObjectByPointer(
+        Process,
+        OBJ_KERNEL_HANDLE,
+        NULL,
+        kProcessCreateThreadAccess | kProcessVmOperationAccess | kProcessVmWriteAccess,
+        NULL,
+        KernelMode,
+        &hProcess);
+    if (!NT_SUCCESS(status))
+    {
+        DiagLog("ObOpenObjectByPointer failed: 0x%X", status);
+        return status;
+    }
+
+    HANDLE hThread = NULL;
+    CLIENT_ID cid;
+    status = pfn(
+        hProcess,       // ProcessHandle
+        NULL,           // SecurityDescriptor (optional)
+        FALSE,          // CreateSuspended = FALSE (run immediately)
+        0,              // StackZeroBits
+        NULL,           // StackReserved (NULL = default)
+        NULL,           // StackCommit (NULL = default)
+        StartRoutine,   // user‑mode entry point
+        Argument,       // passed as the thread’s argument
+        &hThread,
+        &cid);
+
+    DiagLog("RtlCreateUserThread returned 0x%X, hThread = %p", status, hThread);
+
+    if (!NT_SUCCESS(status) && hThread != NULL) {
+        ZwClose(hThread);
+        hThread = NULL;
+    }
+
+    if (NT_SUCCESS(status) && ThreadHandle != NULL) {
+        *ThreadHandle = hThread;
+        hThread = NULL;
+    }
+
+    if (hThread != NULL) {
+        ZwClose(hThread);
+    }
+
+    ZwClose(hProcess);
+    return status;
+}
+// ------------------------------------------------------------------
+// Free memory allocated in the target process (reuses existing logic)
+static VOID FreeTargetMemory(PVOID* Address, SIZE_T Size)
+{
+	UNREFERENCED_PARAMETER(Size);
+
+	if (*Address != NULL) {
+		SIZE_T releaseSize = 0;
+		ZwFreeVirtualMemory(NtCurrentProcess(), Address, &releaseSize, MEM_RELEASE);
+		*Address = NULL;
+	}
+}
+
+static NTSTATUS WaitForRemoteThread(_In_ HANDLE ThreadHandle)
+{
+	LARGE_INTEGER timeout;
+	timeout.QuadPart = kRemoteThreadWaitTimeout100ns;
+
+	NTSTATUS status = ZwWaitForSingleObject(ThreadHandle, FALSE, &timeout);
+	DiagLog("ZwWaitForSingleObject returned 0x%X", status);
+	return status;
+}
+
+// Main injection function – replaces both CreateTargetApcPayload and Queue*APCs
+NTSTATUS InjectDllViaRemoteThread(
+	_In_ PEPROCESS TargetProcess,
+	_In_ PUNICODE_STRING DllPath)
+{
+	if (TargetProcess == NULL || DllPath == NULL || DllPath->Buffer == NULL || DllPath->Length == 0)
 		return STATUS_INVALID_PARAMETER;
-	}
 
-	*ApcRoutine = nullptr;
-	*ApcContext = nullptr;
+	KAPC_STATE apcState;
+	KeStackAttachProcess(TargetProcess, &apcState);
 
-	UserApcArgs user_apc_args = {};
-	if (0 == DllPath->Length || 0 != (DllPath->Length % sizeof(WCHAR))) {
-		DiagLog("CreateTargetApcPayload bad dll length=0x%X", DllPath->Length);
-		return STATUS_INVALID_PARAMETER;
-	}
-	if (DllPath->Length >= sizeof(user_apc_args.dll_path)) {
-		DiagLog("CreateTargetApcPayload dll path too long length=0x%X limit=0x%IX",
-			DllPath->Length, sizeof(user_apc_args.dll_path));
-		return STATUS_NAME_TOO_LONG;
-	}
-
-	RtlCopyMemory(user_apc_args.dll_path, DllPath->Buffer, DllPath->Length);
-	user_apc_args.dll_path[DllPath->Length / sizeof(WCHAR)] = L'\0';
-	DiagLog("before FindLoadLibraryW dllLen=0x%X", DllPath->Length);
-	user_apc_args.load_library = (LoadLibraryWFn)FindLoadLibraryW();
-	DiagSetLoadLibraryResult((PVOID)user_apc_args.load_library);
-	DiagLog("after FindLoadLibraryW address=%p status=0x%08X",
-		user_apc_args.load_library,
-		nullptr == user_apc_args.load_library ? STATUS_PROCEDURE_NOT_FOUND : STATUS_SUCCESS);
-	if (nullptr == user_apc_args.load_library) {
+	// 1. Resolve LoadLibraryW
+	PVOID pLoadLibrary = FindLoadLibraryW();
+	DiagLog("LoadLibraryW address: %p", pLoadLibrary);
+	if (pLoadLibrary == NULL) {
+		KeUnstackDetachProcess(&apcState);
 		return STATUS_PROCEDURE_NOT_FOUND;
 	}
 
-	PVOID injected_apc_context = nullptr;
-	SIZE_T apc_context_size = sizeof(UserApcArgs);
-	DiagLog("before ZwAllocateVirtualMemory(context) base=%p size=0x%IX", injected_apc_context, apc_context_size);
+	// 2. Allocate RW memory for the DLL path (Win32 format)
+	PWSTR pRemotePath = NULL;
+	const SIZE_T pathBytes = DllPath->Length + sizeof(WCHAR);
+	SIZE_T pathRegionSize = pathBytes;
 	NTSTATUS status = ZwAllocateVirtualMemory(
 		NtCurrentProcess(),
-		&injected_apc_context,
+		(PVOID*)&pRemotePath,
 		0,
-		&apc_context_size,
+		&pathRegionSize,
 		MEM_COMMIT | MEM_RESERVE,
-		PAGE_READWRITE
-	);
-	DiagSetContextAllocationStatus(status);
-	DiagLog("after ZwAllocateVirtualMemory(context) base=%p size=0x%IX status=0x%08X",
-		injected_apc_context, apc_context_size, status);
+		PAGE_READWRITE);
 	if (!NT_SUCCESS(status)) {
+		KeUnstackDetachProcess(&apcState);
+		DiagLog("Failed to allocate path: 0x%X", status);
 		return status;
 	}
-	RtlCopyMemory(injected_apc_context, &user_apc_args, sizeof(UserApcArgs));
+	RtlCopyMemory(pRemotePath, DllPath->Buffer, DllPath->Length);
+	pRemotePath[DllPath->Length / sizeof(WCHAR)] = L'\0';  // ensure null termination
+	DiagLog("Allocated DLL path at %p: %wZ", pRemotePath, DllPath);
 
-	PVOID injected_apc_routine = nullptr;
-	SIZE_T routine_size = reinterpret_cast<ULONG_PTR>(user_mode_apc_callback_end) -
-		reinterpret_cast<ULONG_PTR>(user_mode_apc_callback);
-	DiagLog("before ZwAllocateVirtualMemory(routine) base=%p size=0x%IX", injected_apc_routine, routine_size);
+	// 3. Allocate a remote buffer that captures the LoadLibraryW result.
+	PVOID pRemoteLoadResult = NULL;
+	const SIZE_T loadResultBytes = sizeof(ULONGLONG);
+	SIZE_T loadResultRegionSize = loadResultBytes;
 	status = ZwAllocateVirtualMemory(
 		NtCurrentProcess(),
-		&injected_apc_routine,
+		&pRemoteLoadResult,
 		0,
-		&routine_size,
+		&loadResultRegionSize,
 		MEM_COMMIT | MEM_RESERVE,
-		PAGE_EXECUTE_READWRITE
-	);
-	DiagSetRoutineAllocationStatus(status, routine_size);
-	DiagLog("after ZwAllocateVirtualMemory(routine) base=%p size=0x%IX status=0x%08X",
-		injected_apc_routine, routine_size, status);
+		PAGE_READWRITE);
 	if (!NT_SUCCESS(status)) {
-		FreeTargetApcPayload(nullptr, injected_apc_context);
+		FreeTargetMemory((PVOID*)&pRemotePath, pathBytes);
+		KeUnstackDetachProcess(&apcState);
+		DiagLog("Failed to allocate load result buffer: 0x%X", status);
 		return status;
 	}
-	RtlCopyMemory(injected_apc_routine, &user_mode_apc_callback, routine_size);
+	RtlZeroMemory(pRemoteLoadResult, loadResultBytes);
+	DiagLog("Allocated load result buffer at %p", pRemoteLoadResult);
 
-	*ApcRoutine = injected_apc_routine;
-	*ApcContext = injected_apc_context;
-	return STATUS_SUCCESS;
+	// 4. Allocate writable memory for the shellcode, then flip it to RX.
+	PVOID pRemoteShellcode = NULL;
+	const SIZE_T shellcodeBytes = sizeof(g_RemoteThreadShellcode);
+	SIZE_T shellcodeRegionSize = shellcodeBytes;
+	status = ZwAllocateVirtualMemory(
+		NtCurrentProcess(),
+		&pRemoteShellcode,
+		0,
+		&shellcodeRegionSize,
+		MEM_COMMIT | MEM_RESERVE,
+		PAGE_READWRITE);
+	if (!NT_SUCCESS(status)) {
+		FreeTargetMemory(&pRemoteLoadResult, loadResultBytes);
+		FreeTargetMemory((PVOID*)&pRemotePath, pathBytes);
+		KeUnstackDetachProcess(&apcState);
+		DiagLog("Failed to allocate shellcode: 0x%X", status);
+		return status;
+	}
+	RtlCopyMemory(pRemoteShellcode, g_RemoteThreadShellcode, shellcodeBytes);
+	PatchShellcode(pRemoteShellcode, pLoadLibrary, pRemoteLoadResult);
+	DiagLog("Allocated shellcode at %p, patched with LoadLibraryW %p", pRemoteShellcode, pLoadLibrary);
+
+	ULONG oldProtect = 0;
+	PVOID protectBase = pRemoteShellcode;
+	SIZE_T protectSize = shellcodeBytes;
+	status = ZwProtectVirtualMemory(
+		NtCurrentProcess(),
+		&protectBase,
+		&protectSize,
+		PAGE_EXECUTE_READ,
+		&oldProtect);
+	if (!NT_SUCCESS(status)) {
+		FreeTargetMemory(&pRemoteShellcode, shellcodeBytes);
+		FreeTargetMemory(&pRemoteLoadResult, loadResultBytes);
+		FreeTargetMemory((PVOID*)&pRemotePath, pathBytes);
+		KeUnstackDetachProcess(&apcState);
+		DiagLog("ZwProtectVirtualMemory failed: 0x%X", status);
+		return status;
+	}
+	DiagLog("Updated shellcode protection, old protect=0x%X", oldProtect);
+
+	// 5. Detach from the target process.
+	KeUnstackDetachProcess(&apcState);
+
+	// 6. Create the remote thread and wait for LoadLibraryW to complete.
+	HANDLE hRemoteThread = NULL;
+	status = CreateRemoteThreadInProcess(TargetProcess, pRemoteShellcode, pRemotePath, &hRemoteThread);
+	if (!NT_SUCCESS(status)) {
+		// On failure, free the memory we allocated (re-attach to free).
+		KeStackAttachProcess(TargetProcess, &apcState);
+		FreeTargetMemory(&pRemoteShellcode, shellcodeBytes);
+		FreeTargetMemory(&pRemoteLoadResult, loadResultBytes);
+		FreeTargetMemory((PVOID*)&pRemotePath, pathBytes);
+		KeUnstackDetachProcess(&apcState);
+		DiagLog("RtlCreateUserThread failed: 0x%X", status);
+		return status;
+	}
+
+	DiagLog("Remote thread created successfully");
+	status = WaitForRemoteThread(hRemoteThread);
+	ZwClose(hRemoteThread);
+	if (!NT_SUCCESS(status)) {
+		DiagLog("Remote thread wait failed: 0x%X", status);
+		return status;
+	}
+
+	KeStackAttachProcess(TargetProcess, &apcState);
+	ULONGLONG loadResult = 0;
+	if (pRemoteLoadResult != NULL) {
+		loadResult = *(volatile ULONGLONG*)pRemoteLoadResult;
+	}
+	FreeTargetMemory(&pRemoteShellcode, shellcodeBytes);
+	FreeTargetMemory(&pRemoteLoadResult, loadResultBytes);
+	FreeTargetMemory((PVOID*)&pRemotePath, pathBytes);
+	KeUnstackDetachProcess(&apcState);
+
+	DiagSetLoadLibraryResult((PVOID)(ULONG_PTR)loadResult);
+	DiagLog("LoadLibraryW returned 0x%p", (PVOID)(ULONG_PTR)loadResult);
+	if (loadResult == 0) {
+		DiagLog("LoadLibraryW returned NULL");
+		return STATUS_UNSUCCESSFUL;
+	}
+
+	return status;
 }
 
+// ------------------------------------------------------------------
+// The old APC queueing function is no longer used. Keep it empty if needed
+// for backward compatibility, or delete it entirely from the interface.
+NTSTATUS QueueUserModeApcToProcessThreads(HANDLE, PVOID, PVOID) {
+	return STATUS_NOT_IMPLEMENTED;
+}
+
+// The old payload creation function – no longer used.
+NTSTATUS CreateTargetApcPayload(PUNICODE_STRING, PVOID*, PVOID*) {
+	return STATUS_NOT_IMPLEMENTED;
+}
+
+// The old free function – can be removed, but kept to satisfy existing calls.
 VOID FreeTargetApcPayload(PVOID ApcRoutine, PVOID ApcContext) {
-	SIZE_T region_size = 0;
-	if (nullptr != ApcRoutine) {
-		ZwFreeVirtualMemory(NtCurrentProcess(), &ApcRoutine, &region_size, MEM_RELEASE);
-	}
-	if (nullptr != ApcContext) {
-		region_size = 0;
-		ZwFreeVirtualMemory(NtCurrentProcess(), &ApcContext, &region_size, MEM_RELEASE);
-	}
-}
-
-NTSTATUS QueueUserModeApcToProcessThreads(HANDLE ProcessId, PVOID ApcRoutine, PVOID ApcContext) {
-	if (nullptr == ProcessId || nullptr == ApcRoutine) {
-		DiagLog("QueueUserModeApcToProcessThreads invalid parameter pid=%p routine=%p context=%p",
-			ProcessId, ApcRoutine, ApcContext);
-		return STATUS_INVALID_PARAMETER;
-	}
-
-	ProcessInfo process_info = {};
-	DiagLog("before get_process_info_by_pid pid=%p", ProcessId);
-	NTSTATUS status = get_process_info_by_pid(reinterpret_cast<size_t>(ProcessId), &process_info);
-	DiagSetThreadEnumerationStatus(status, NT_SUCCESS(status) ? process_info.number_of_threads : 0);
-	DiagLog("after get_process_info_by_pid pid=%p threads=%Iu status=0x%08X",
-		ProcessId, NT_SUCCESS(status) ? process_info.number_of_threads : 0, status);
-	if (!NT_SUCCESS(status)) {
-		return status;
-	}
-
-	if (0 == process_info.number_of_threads || nullptr == process_info.threads_id) {
-		DiagSetThreadEnumerationStatus(STATUS_NOT_FOUND, 0);
-		DiagLog("no threads for pid=%p", ProcessId);
-		return STATUS_NOT_FOUND;
-	}
-
-	DiagSetStage(InjectionDiagnosticStageQueueApc);
-	ULONG queued_apcs = 0;
-	NTSTATUS last_status = STATUS_NOT_FOUND;
-	for (size_t i = 0; i < process_info.number_of_threads; i++) {
-		PKTHREAD target_thread = nullptr;
-		DiagLog("before PsLookupThreadByThreadId tid=%p", (HANDLE)process_info.threads_id[i]);
-		status = PsLookupThreadByThreadId((HANDLE)process_info.threads_id[i], &target_thread);
-		if (!NT_SUCCESS(status)) {
-			DiagNoteThreadLookupFailure(process_info.threads_id[i], status);
-			DiagLog("after PsLookupThreadByThreadId tid=%p thread=%p status=0x%08X",
-				(HANDLE)process_info.threads_id[i], target_thread, status);
-			last_status = status;
-			continue;
-		}
-		DiagLog("after PsLookupThreadByThreadId tid=%p thread=%p status=0x%08X",
-			(HANDLE)process_info.threads_id[i], target_thread, status);
-
-		DiagLog("before call_apc tid=%p routine=%p context=%p",
-			(HANDLE)process_info.threads_id[i], ApcRoutine, ApcContext);
-		status = call_apc(target_thread, ApcRoutine, ApcContext);
-		DiagNoteApcQueueResult(process_info.threads_id[i], status);
-		DiagLog("after call_apc tid=%p status=0x%08X",
-			(HANDLE)process_info.threads_id[i], status);
-		if (NT_SUCCESS(status)) {
-			queued_apcs++;
-		}
-		else {
-			last_status = status;
-		}
-		ObDereferenceObject(target_thread);
-	}
-
-	ExFreePool(process_info.threads_id);
-	return queued_apcs > 0 ? STATUS_SUCCESS : last_status;
+	SIZE_T size = 0;
+	if (ApcRoutine) ZwFreeVirtualMemory(NtCurrentProcess(), &ApcRoutine, &size, MEM_RELEASE);
+	if (ApcContext) { size = 0; ZwFreeVirtualMemory(NtCurrentProcess(), &ApcContext, &size, MEM_RELEASE); }
 }

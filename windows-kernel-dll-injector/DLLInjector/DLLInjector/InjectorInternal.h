@@ -2,6 +2,11 @@
 
 #include <ntifs.h>
 
+NTSTATUS InjectDllViaRemoteThread(
+	_In_ PEPROCESS TargetProcess,
+	_In_ PUNICODE_STRING DllPath
+);
+
 NTSTATUS CreateTargetApcPayload(
 	_In_ PUNICODE_STRING DllPath,
 	_Outptr_ PVOID* ApcRoutine,
