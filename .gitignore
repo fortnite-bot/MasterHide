@@ -51,7 +51,14 @@
 [Bb]in
 [Dd]ebug*/
 *.sbr
+
 obj/
+*-analysis/
+# *.md
+# *.txt
+LiveKD/
+*ida*/
+
 [Rr]elease*/
 _ReSharper*/
 *.db
@@ -61,3 +68,4 @@ _ReSharper*/
 *.ipch
 
 .vs/
+MasterHide/.vs/MasterHide/v17/DocumentLayout.json
