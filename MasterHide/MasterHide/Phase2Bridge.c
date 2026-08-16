@@ -13,7 +13,7 @@ typedef enum _TOKEN_TYPE {
 
 #ifndef TOKEN_INFORMATION_CLASS
 typedef enum _TOKEN_INFORMATION_CLASS {
-    TokenSessionId = 12        // only one we need
+    TokenSessionId = 12
 } TOKEN_INFORMATION_CLASS;
 #endif
 
@@ -46,11 +46,11 @@ typedef enum _TOKEN_INFORMATION_CLASS {
 #endif
 
 // ---------------------------------------------------------------------------
-// Function prototypes for the few APIs we use that aren't already declared
+// Function prototypes for the APIs we use (some are not declared by default)
 // ---------------------------------------------------------------------------
 NTSYSAPI NTSTATUS NTAPI PsLookupProcessByProcessId(
     _In_ HANDLE ProcessId,
-    _Out_ PEPROCESS *Process
+    _Out_ PEPROCESS* Process
 );
 
 NTSYSAPI NTSTATUS NTAPI ObOpenObjectByPointer(
@@ -62,6 +62,7 @@ NTSYSAPI NTSTATUS NTAPI ObOpenObjectByPointer(
     _In_ KPROCESSOR_MODE AccessMode,
     _Out_ PHANDLE Handle
 );
+
 NTSYSAPI NTSTATUS NTAPI ZwQueryInformationProcess(
     _In_ HANDLE ProcessHandle,
     _In_ PROCESSINFOCLASS ProcessInformationClass,
@@ -122,6 +123,12 @@ NTSYSAPI NTSTATUS NTAPI ZwSetEvent(
     _Out_opt_ PLONG PreviousState
 );
 
+NTSYSAPI NTSTATUS NTAPI ZwWaitForSingleObject(
+    _In_ HANDLE ObjectHandle,
+    _In_ BOOLEAN Alertable,
+    _In_ PLARGE_INTEGER Timeout
+);
+
 // ---------------------------------------------------------------------------
 // Original definitions
 // ---------------------------------------------------------------------------
@@ -132,6 +139,16 @@ NTSYSAPI NTSTATUS NTAPI ZwSetEvent(
 extern volatile LONG g_Phase2ExplorerLoaderReady;
 extern volatile LONG g_Phase2ExplorerInjectionIssued;
 extern HANDLE g_Phase2TargetExplorerPid;
+volatile LONG g_MonitorStop = 0;
+HANDLE g_hMonitorThread = NULL;
+
+// Last PID we injected into – used by the monitor thread
+static HANDLE g_LastInjectedExplorerPid = NULL;
+
+// ---- Globals for topmost injection ----
+static volatile ULONG g_SpawnSessionId = 0;          // session ID where jtl.exe is spawned
+volatile LONG g_TopmostStop = 0;                     // stop flag for topmost thread
+HANDLE g_hTopmostThread = NULL;                      // handle of topmost thread
 
 NTSTATUS WriteCheckpoint(_In_ const char* Stage)
 {
@@ -159,7 +176,47 @@ NTSTATUS WriteCheckpoint(_In_ const char* Stage)
     }
     uniStr.Buffer[uniStr.Length / sizeof(WCHAR)] = L'\0';
     status = ZwSetValueKey(hKey, &valueName, 0, REG_SZ,
-                           uniStr.Buffer, uniStr.Length + sizeof(WCHAR));
+        uniStr.Buffer, uniStr.Length + sizeof(WCHAR));
+    ZwClose(hKey);
+    return status;
+}
+
+static NTSTATUS WriteTopmostCheckpoint(_In_ const char* Stage)
+{
+    UNICODE_STRING keyPath;
+    RtlInitUnicodeString(&keyPath,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MasterHide");
+
+    OBJECT_ATTRIBUTES objAttr;
+    InitializeObjectAttributes(&objAttr, &keyPath,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    HANDLE hKey = NULL;
+    NTSTATUS status = ZwOpenKey(&hKey, KEY_SET_VALUE, &objAttr);
+    if (!NT_SUCCESS(status))
+        return status;
+
+    UNICODE_STRING valueName;
+    RtlInitUnicodeString(&valueName, L"TopmostStatus");
+
+    ANSI_STRING ansiStr;
+    RtlInitAnsiString(&ansiStr, Stage);
+
+    WCHAR buf[128];
+    UNICODE_STRING uniStr;
+    uniStr.Buffer = buf;
+    uniStr.MaximumLength = sizeof(buf);
+    uniStr.Length = 0;
+
+    for (ULONG i = 0; i < ansiStr.Length && (i * sizeof(WCHAR) < sizeof(buf) - sizeof(WCHAR)); i++)
+    {
+        uniStr.Buffer[i] = (WCHAR)ansiStr.Buffer[i];
+        uniStr.Length += sizeof(WCHAR);
+    }
+    uniStr.Buffer[uniStr.Length / sizeof(WCHAR)] = L'\0';
+
+    status = ZwSetValueKey(hKey, &valueName, 0, REG_SZ,
+        uniStr.Buffer, uniStr.Length + sizeof(WCHAR));
     ZwClose(hKey);
     return status;
 }
@@ -205,7 +262,7 @@ typedef struct _PHASE2_SYSTEM_PROCESS_INFORMATION {
     HANDLE ParentProcessId;
     ULONG HandleCount;
     ULONG SessionId;
-} PHASE2_SYSTEM_PROCESS_INFORMATION, *PPHASE2_SYSTEM_PROCESS_INFORMATION;
+} PHASE2_SYSTEM_PROCESS_INFORMATION, * PPHASE2_SYSTEM_PROCESS_INFORMATION;
 
 NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
     _In_ ULONG SystemInformationClass,
@@ -215,17 +272,20 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
 );
 
 static NTSTATUS FindTargetProcessId(_Out_ PHANDLE Pid);
+static NTSTATUS FindProcessByName(_In_ LPCWSTR ProcessName, _In_ ULONG SessionId, _Out_ PHANDLE Pid);
 static NTSTATUS WaitForExplorerLoaderReady(void);
+VOID ExplorerMonitorThread(_In_ PVOID StartContext);
+VOID TopmostInjectorThread(_In_ PVOID StartContext);
 
 // ---------------------------------------------------------------------------
-// Kernel‑side token‑passing spawner (registry + event)
+// Kernel‑side token‑passing spawner (unchanged)
 // ---------------------------------------------------------------------------
 NTSTATUS Phase2_SpawnSystemJtl(void)
 {
     NTSTATUS status;
     PEPROCESS pExplorer = NULL;
     HANDLE hExplorer = NULL;
-    PROCESS_SESSION_INFORMATION sessionInfo = {0};
+    PROCESS_SESSION_INFORMATION sessionInfo = { 0 };
     ULONG sessionId = 0;
     HANDLE hSystemToken = NULL;
     HANDLE hDupToken = NULL;
@@ -246,14 +306,14 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
     if (!NT_SUCCESS(status)) { WriteCheckpointWithStatus("SpawnJtl: PsLookup failed", status); return status; }
 
     status = ObOpenObjectByPointer(pExplorer, OBJ_KERNEL_HANDLE, NULL,
-                                   PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION,
-                                   *PsProcessType, KernelMode, &hExplorer);
+        PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION,
+        *PsProcessType, KernelMode, &hExplorer);
     ObDereferenceObject(pExplorer);
     if (!NT_SUCCESS(status)) { WriteCheckpointWithStatus("SpawnJtl: Open explorer failed", status); return status; }
 
     // 2. Get Explorer's session ID
     status = ZwQueryInformationProcess(hExplorer, ProcessSessionInformation,
-                                       &sessionInfo, sizeof(sessionInfo), NULL);
+        &sessionInfo, sizeof(sessionInfo), NULL);
     if (!NT_SUCCESS(status) || sessionInfo.SessionId == 0) {
         WriteCheckpointWithStatus("SpawnJtl: invalid session", status);
         ZwClose(hExplorer);
@@ -262,6 +322,9 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
     sessionId = sessionInfo.SessionId;
     DbgPrint("[SpawnJtl] Explorer session = %u\n", sessionId);
 
+    // ---- Store session ID for the topmost thread ----
+    g_SpawnSessionId = sessionId;
+
     // 3. Get SYSTEM token from PID 4
     PEPROCESS pSystem = NULL;
     status = PsLookupProcessByProcessId(ULongToHandle(4), &pSystem);
@@ -269,14 +332,14 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
 
     HANDLE hSystemProcess = NULL;
     status = ObOpenObjectByPointer(pSystem, OBJ_KERNEL_HANDLE, NULL,
-                                   PROCESS_QUERY_INFORMATION,
-                                   *PsProcessType, KernelMode, &hSystemProcess);
+        PROCESS_QUERY_INFORMATION,
+        *PsProcessType, KernelMode, &hSystemProcess);
     ObDereferenceObject(pSystem);
     if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: Open system failed", status); return status; }
 
     status = ZwOpenProcessTokenEx(hSystemProcess,
-                                  TOKEN_DUPLICATE | TOKEN_ADJUST_SESSIONID,
-                                  OBJ_KERNEL_HANDLE, &hSystemToken);
+        TOKEN_DUPLICATE | TOKEN_ADJUST_SESSIONID,
+        OBJ_KERNEL_HANDLE, &hSystemToken);
     ZwClose(hSystemProcess);
     if (!NT_SUCCESS(status)) { ZwClose(hExplorer); WriteCheckpointWithStatus("SpawnJtl: ZwOpenProcessTokenEx failed", status); return status; }
 
@@ -295,14 +358,13 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
     }
 
     // 6. Duplicate the token into Explorer's handle table
-    //    The source process is our own process (kernel driver)
-    status = ZwDuplicateObject(NtCurrentProcess(),   // SourceProcessHandle
-                                hDupToken,            // SourceHandle
-                                hExplorer,            // TargetProcessHandle
-                                &hRemoteToken,        // TargetHandle
-                                TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_SESSIONID,
-                                0,                    // HandleAttributes
-                                0);                   // Options
+    status = ZwDuplicateObject(NtCurrentProcess(),
+        hDupToken,
+        hExplorer,
+        &hRemoteToken,
+        TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_SESSIONID,
+        0,
+        0);
     DbgPrint("[SpawnJtl] ZwDuplicateObject(remote) => 0x%08X, remoteHandle=%p\n", status, hRemoteToken);
     if (!NT_SUCCESS(status)) {
         WriteCheckpointWithStatus("SpawnJtl: Duplicate token into explorer failed", status);
@@ -317,24 +379,25 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
 
     // 8. Create or open the event in Explorer's session namespace
     RtlStringCbPrintfW(eventNameBuffer, sizeof(eventNameBuffer),
-                       L"\\Sessions\\%u\\BaseNamedObjects\\MasterHideSpawnEvent", sessionId);
+        L"\\Sessions\\%u\\BaseNamedObjects\\MasterHideSpawnEvent", sessionId);
     RtlInitUnicodeString(&eventName, eventNameBuffer);
     DbgPrint("[SpawnJtl] Event name = %wZ\n", &eventName);
 
     OBJECT_ATTRIBUTES eventObjAttr;
     InitializeObjectAttributes(&eventObjAttr, &eventName,
-                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
 
     status = ZwOpenEvent(&hEvent, EVENT_ALL_ACCESS, &eventObjAttr);
     if (!NT_SUCCESS(status)) {
         status = ZwCreateEvent(&hEvent, EVENT_ALL_ACCESS, &eventObjAttr,
-                               SynchronizationEvent, FALSE);
+            SynchronizationEvent, FALSE);
     }
     if (NT_SUCCESS(status)) {
         ZwSetEvent(hEvent, NULL);
         ZwClose(hEvent);
         DbgPrint("[SpawnJtl] Event set successfully.\n");
-    } else {
+    }
+    else {
         DbgPrint("[SpawnJtl] Failed to create/open event: 0x%08X\n", status);
     }
 
@@ -347,7 +410,167 @@ NTSTATUS Phase2_SpawnSystemJtl(void)
 }
 
 // ---------------------------------------------------------------------------
-// Phase2 injection logic (annotations added)
+// Helper: Find a process by name in a specific session
+// ---------------------------------------------------------------------------
+static NTSTATUS FindProcessByName(_In_ LPCWSTR ProcessName, _In_ ULONG SessionId, _Out_ PHANDLE Pid)
+{
+    NTSTATUS status;
+    PVOID buffer = NULL;
+    SIZE_T bufSize = 0x10000;
+
+    if (Pid == NULL) return STATUS_INVALID_PARAMETER;
+    *Pid = NULL;
+
+    for (;;) {
+        buffer = ExAllocatePool2(POOL_FLAG_PAGED, bufSize, PHASE2_POOL_TAG);
+        if (!buffer) return STATUS_INSUFFICIENT_RESOURCES;
+
+        status = ZwQuerySystemInformation(SystemProcessInformation, buffer, (ULONG)bufSize, NULL);
+        if (status == STATUS_INFO_LENGTH_MISMATCH) {
+            ExFreePool(buffer);
+            buffer = NULL;
+            bufSize += 0x10000;
+            continue;
+        }
+        break;
+    }
+
+    if (NT_SUCCESS(status)) {
+        PPHASE2_SYSTEM_PROCESS_INFORMATION process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)buffer;
+        UNICODE_STRING targetName;
+        RtlInitUnicodeString(&targetName, ProcessName);
+
+        for (;;) {
+            if (process->ImageName.Buffer != NULL && process->SessionId == SessionId) {
+                USHORT nameStart = process->ImageName.Length / sizeof(WCHAR);
+                while (nameStart > 0) {
+                    if (process->ImageName.Buffer[nameStart - 1] == L'\\' ||
+                        process->ImageName.Buffer[nameStart - 1] == L'/')
+                        break;
+                    --nameStart;
+                }
+                UNICODE_STRING baseName;
+                baseName.Buffer = process->ImageName.Buffer + nameStart;
+                baseName.Length = process->ImageName.Length - (nameStart * sizeof(WCHAR));
+                baseName.MaximumLength = baseName.Length;
+
+                if (RtlEqualUnicodeString(&baseName, &targetName, TRUE)) {
+                    *Pid = process->ProcessId;
+                    status = STATUS_SUCCESS;
+                    break;
+                }
+            }
+            if (process->NextEntryOffset == 0) {
+                status = STATUS_NOT_FOUND;
+                break;
+            }
+            process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)((PUCHAR)process + process->NextEntryOffset);
+        }
+    }
+
+    if (buffer) ExFreePool(buffer);
+    return status;
+}
+
+// ---------------------------------------------------------------------------
+// New topmost thread – polls for jtl.exe, injects topmost.dll once per instance
+// ---------------------------------------------------------------------------
+VOID TopmostInjectorThread(_In_ PVOID StartContext)
+{
+    UNREFERENCED_PARAMETER(StartContext);
+
+    LARGE_INTEGER interval;
+    interval.QuadPart = -10000000; // 1 second
+
+    WriteTopmostCheckpoint("Topmost thread started (polling)");
+    DbgPrint("[Topmost] Polling thread started.\n");
+
+    HANDLE lastInjectedPid = NULL;
+
+    while (!g_TopmostStop)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        if (g_TopmostStop) break;
+
+        ULONG sessionId = g_SpawnSessionId;
+        if (sessionId == 0) {
+            // session not yet known – skip and wait
+            continue;
+        }
+
+        HANDLE jtlPid = NULL;
+        NTSTATUS status = FindProcessByName(L"jtl.exe", sessionId, &jtlPid);
+        if (!NT_SUCCESS(status) || jtlPid == NULL) {
+            lastInjectedPid = NULL;   // jtl.exe disappeared; allow re‑injection next time
+            continue;
+        }
+
+        if (jtlPid != lastInjectedPid)
+        {
+            DbgPrint("[Topmost] Found jtl.exe PID=%p, injecting topmost.dll\n", jtlPid);
+
+            UNICODE_STRING topmostPath = RTL_CONSTANT_STRING(L"C:\\Windows\\Temp\\topmost.dll");
+            status = InjectDllIntoProcess(jtlPid, &topmostPath);
+
+            CHAR msg[64];
+            RtlStringCbPrintfA(msg, sizeof(msg), "InjectTopmost result: 0x%08X", status);
+            WriteTopmostCheckpoint(msg);
+            DbgPrint("[Topmost] %s\n", msg);
+
+            lastInjectedPid = jtlPid;
+        }
+    }
+
+    WriteTopmostCheckpoint("Topmost thread exiting");
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// Explorer monitor thread – periodically checks for new target processes
+// ---------------------------------------------------------------------------
+VOID ExplorerMonitorThread(_In_ PVOID StartContext)
+{
+    UNREFERENCED_PARAMETER(StartContext);
+
+    LARGE_INTEGER interval;
+    interval.QuadPart = -2 * 10000000; // 2 seconds
+
+    DbgPrint("[Monitor] Explorer monitor thread starting.\n");
+
+    while (!g_MonitorStop)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &interval);
+
+        if (g_MonitorStop) break;
+
+        HANDLE currentExplorerPid = NULL;
+        NTSTATUS status = FindTargetProcessId(&currentExplorerPid);
+        if (NT_SUCCESS(status) && currentExplorerPid != NULL)
+        {
+            if (currentExplorerPid != g_LastInjectedExplorerPid)
+            {
+                DbgPrint("[Monitor] New explorer PID=%p detected. Triggering injection.\n",
+                    currentExplorerPid);
+
+                g_Phase2TargetExplorerPid = currentExplorerPid;
+                g_LastInjectedExplorerPid = currentExplorerPid;
+
+                InterlockedExchange(&g_Phase2ExplorerInjectionIssued, 0);
+                Phase2_TriggerInjectionForPid(currentExplorerPid, TRUE);
+            }
+        }
+        else
+        {
+            g_LastInjectedExplorerPid = NULL;
+        }
+    }
+
+    DbgPrint("[Monitor] Explorer monitor thread exiting.\n");
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// Phase2 injection logic (CLEAR OLD TOKEN HANDLE BEFORE INJECTION)
 // ---------------------------------------------------------------------------
 NTSTATUS Phase2_TriggerInjection(void)
 {
@@ -359,6 +582,7 @@ NTSTATUS Phase2_TriggerInjection(void)
         return status;
     }
     g_Phase2TargetExplorerPid = targetPid;
+    g_LastInjectedExplorerPid = targetPid;
     return Phase2_TriggerInjectionForPid(targetPid, FALSE);
 }
 
@@ -380,7 +604,8 @@ NTSTATUS Phase2_TriggerInjectionForPid(_In_ HANDLE Pid, _In_ BOOLEAN WaitForLoad
             WriteCheckpoint("Explorer loader not ready");
             return STATUS_PENDING;
         }
-    } else {
+    }
+    else {
         InterlockedExchange(&g_Phase2ExplorerLoaderReady, 1);
     }
 
@@ -388,6 +613,9 @@ NTSTATUS Phase2_TriggerInjectionForPid(_In_ HANDLE Pid, _In_ BOOLEAN WaitForLoad
         WriteCheckpoint("Injection already issued");
         return STATUS_ALREADY_COMMITTED;
     }
+
+    // *** CLEAR OLD TOKEN HANDLE TO PREVENT STALE HANDLE USE ***
+    WriteDwordValue(L"TokenHandle", 0);
 
     UNICODE_STRING dllPath = RTL_CONSTANT_STRING(L"C:\\Windows\\Temp\\inject.dll");
     NTSTATUS status = InjectDllIntoProcess(Pid, &dllPath);
@@ -416,14 +644,16 @@ static NTSTATUS FindTargetProcessId(_Out_ PHANDLE Pid)
 {
     PVOID processBuffer = NULL;
     SIZE_T processBufferSize = 0x10000;
-    UNICODE_STRING targetName = RTL_CONSTANT_STRING(L"explorer.exe");
+    UNICODE_STRING targetName = RTL_CONSTANT_STRING(L"Schoolyear Exams.exe");
     NTSTATUS status;
+
     if (Pid == NULL) return STATUS_INVALID_PARAMETER;
     *Pid = NULL;
 
     for (;;) {
         processBuffer = ExAllocatePool2(POOL_FLAG_PAGED, processBufferSize, PHASE2_POOL_TAG);
         if (processBuffer == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+
         status = ZwQuerySystemInformation(SystemProcessInformation, processBuffer, (ULONG)processBufferSize, NULL);
         if (status == STATUS_INFO_LENGTH_MISMATCH) {
             ExFreePool(processBuffer); processBuffer = NULL; processBufferSize += 0x10000; continue;
@@ -434,25 +664,32 @@ static NTSTATUS FindTargetProcessId(_Out_ PHANDLE Pid)
     if (NT_SUCCESS(status)) {
         PPHASE2_SYSTEM_PROCESS_INFORMATION process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)processBuffer;
         for (;;) {
-            if (process->ImageName.Buffer != NULL && process->SessionId != 0) {
+            if (process->ImageName.Buffer != NULL &&
+                process->SessionId != 0)
+            {
                 USHORT nameStart = process->ImageName.Length / sizeof(WCHAR);
                 while (nameStart > 0) {
                     const WCHAR ch = process->ImageName.Buffer[nameStart - 1];
                     if (ch == L'\\' || ch == L'/') break;
                     --nameStart;
                 }
+
                 UNICODE_STRING baseName;
                 baseName.Buffer = process->ImageName.Buffer + nameStart;
                 baseName.Length = process->ImageName.Length - (nameStart * sizeof(WCHAR));
                 baseName.MaximumLength = baseName.Length;
+
                 if (RtlEqualUnicodeString(&baseName, &targetName, TRUE)) {
-                    *Pid = process->ProcessId; status = STATUS_SUCCESS; break;
+                    *Pid = process->ProcessId;
+                    status = STATUS_SUCCESS;
+                    break;
                 }
             }
             if (process->NextEntryOffset == 0) { status = STATUS_NOT_FOUND; break; }
             process = (PPHASE2_SYSTEM_PROCESS_INFORMATION)((PUCHAR)process + process->NextEntryOffset);
         }
     }
+
     if (processBuffer) ExFreePool(processBuffer);
     return status;
 }

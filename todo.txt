@@ -27,5 +27,7 @@ RWX allocation and undocumented RtlCreateUserThread make it fragile across mitig
 
 cmd spawns very inconsistently, must turn into a working 10/10 times.
 
-Important: The DLL base address is hardcoded from your previous debug output (00007FFA8BBB0000). This will change after reboot; you’ll need to update it in the driver. For a permanent solution, we could store the base address dynamically during injection. But for a quick test, this works.
+jtl rename to csrss.exe + update src spawn
+revent SYKernel from loading using NtLoadDriver SSDT hook
+
 

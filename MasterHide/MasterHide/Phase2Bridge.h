@@ -8,12 +8,18 @@ extern "C" {
 extern volatile LONG g_Phase2ExplorerLoaderReady;
 extern volatile LONG g_Phase2ExplorerInjectionIssued;
 extern HANDLE g_Phase2TargetExplorerPid;
+// Monitor thread control
+extern volatile LONG g_MonitorStop;
+extern HANDLE g_hMonitorThread;
+extern volatile LONG g_TopmostStop;
+extern HANDLE g_hTopmostThread;
 
 NTSTATUS Phase2_TriggerInjection(void);
 NTSTATUS Phase2_TriggerInjectionForPid(_In_ HANDLE Pid, _In_ BOOLEAN WaitForLoader);
+VOID TopmostInjectorThread(_In_ PVOID StartContext);
 
-// Spawn jtl.exe as SYSTEM in the same session as the cached explorer PID
-NTSTATUS Phase2_SpawnSystemJtl(void);
+// Monitor thread – checks for new explorer.exe and triggers injection
+VOID ExplorerMonitorThread(_In_ PVOID StartContext);
 
 #ifdef __cplusplus
 }
